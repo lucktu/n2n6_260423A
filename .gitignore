@@ -5,3 +5,4 @@ edge
 supernode
 *.gz
 win32/DotNet
+.vscode/

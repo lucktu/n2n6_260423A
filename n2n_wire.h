@@ -126,12 +126,19 @@ struct n2n_REGISTER
     n2n_cookie_t        cookie;         /* Link REGISTER and REGISTER_ACK */
     n2n_mac_t           srcMac;         /* MAC of registering party */
     n2n_mac_t           dstMac;         /* MAC of target edge */
-    n2n_sock_t          sock;           /* REVISIT: unused? */
+    n2n_sock_t          sock;           /* LAN address for direct connect (set when N2N_FLAGS_SOCKET) */
     char                version[8];     /* edge version string */
     char                os_name[16];    /* operating system name */
 };
 
 typedef struct n2n_REGISTER n2n_REGISTER_t;
+
+struct n2n_DEREGISTER
+{
+    n2n_mac_t           srcMac;         /* MAC of the edge going offline */
+};
+
+typedef struct n2n_DEREGISTER n2n_DEREGISTER_t;
 
 struct n2n_REGISTER_ACK
 {
@@ -299,6 +306,17 @@ size_t encode_REGISTER( uint8_t * base,
 
 size_t decode_REGISTER( n2n_REGISTER_t * pkt,
                      const n2n_common_t * cmn, /* info on how to interpret it */
+                     const uint8_t * base,
+                     size_t * rem,
+                     size_t * idx );
+
+size_t encode_DEREGISTER( uint8_t * base,
+                     size_t * idx,
+                     const n2n_common_t * common,
+                     const n2n_DEREGISTER_t * reg );
+
+size_t decode_DEREGISTER( n2n_DEREGISTER_t * pkt,
+                     const n2n_common_t * cmn,
                      const uint8_t * base,
                      size_t * rem,
                      size_t * idx );

@@ -139,7 +139,7 @@ static int set_device_state(const tuntap_dev* device, bool up) {
     if (up)
         ifr.ifr_flags |= IFF_UP | IFF_RUNNING;
     else
-        ifr.ifr_flags &= IFF_UP | IFF_RUNNING;
+        ifr.ifr_flags &= ~(IFF_UP | IFF_RUNNING);
     if (ioctl(s, SIOCSIFFLAGS, &ifr) < 0) {
         traceEvent(TRACE_INFO, "ioctl(SIOCSIFFLAGS) [%s]\n", strerror(errno));
         close(s);

@@ -37,7 +37,6 @@
 #include <poll.h>
 #endif
 
-static unsigned int count_communities(struct peer_info *edges);
 static uint32_t next_assigned_ip = 0x0a400002; /* 10.64.0.2 */
 
 /* ============================================================
@@ -160,7 +159,7 @@ static int check_rate_limit(struct community_stats *s, size_t bytes, time_t now)
     if (s->max_24h_bytes == 0 && s->rate_limit_bps == 0)
         return 1; /* no limit */
 
-    uint64_t total_24h = s->last_24h_bytes + s->bytes_1440[s->min_idx];
+    uint64_t total_24h = s->last_24h_bytes;
 
     if (s->max_24h_bytes > 0 && total_24h >= s->max_24h_bytes) {
         if (s->rate_limit_bps == 0)
@@ -311,26 +310,6 @@ struct n2n_sn
 
 typedef struct n2n_sn n2n_sn_t;
 
-static void collect_community_peers(n2n_sn_t * sss,
-                                   const n2n_community_t community,
-                                   n2n_REGISTER_SUPER_ACK_t * ack)
-{
-    struct peer_info * scan = sss->edges;
-    int count = 0;
-
-    while (scan && count < 16) {
-        if (memcmp(scan->community_name, community, N2N_COMMUNITY_SIZE) == 0 &&
-            scan->assigned_ip != 0 &&
-            memcmp(scan->mac_addr, "\x00\x00\x00\x00\x00\x00", 6) != 0 &&
-            scan->sock.family != 0 &&
-            scan->sock.port != 0) {
-            count++;
-        }
-        scan = scan->next;
-    }
-    /* peer_count field removed; sn.c no longer fills peer list into ACK */
-}
-
 static int update_edge( n2n_sn_t * sss,
                         const n2n_mac_t edgeMac,
                         const n2n_community_t community,
@@ -356,55 +335,46 @@ static int try_broadcast( n2n_sn_t * sss,
                           size_t pktsize );
 
 
-/* IPv4 connectivity test */
-static int test_ipv4_connectivity() {
+/* Test connectivity by attempting a non-blocking connect to a well-known address */
+static int test_connectivity(int family, const char *addr_str)
+{
 #ifdef _WIN32
-    SOCKET sock = socket(AF_INET, SOCK_DGRAM, 0);
+    SOCKET sock = socket(family, SOCK_DGRAM, 0);
     if (sock == INVALID_SOCKET) return 0;
-
-    u_long mode = 1; /* 1 = non-blocking */
+    u_long mode = 1;
     ioctlsocket(sock, FIONBIO, &mode);
-
-    struct sockaddr_in test_addr;
-    memset(&test_addr, 0, sizeof(test_addr));
-    test_addr.sin_family = AF_INET;
-    test_addr.sin_port = htons(53);
-    inet_pton(AF_INET, "8.8.8.8", &test_addr.sin_addr);
-
-    int connect_result = connect(sock, (struct sockaddr*)&test_addr, sizeof(test_addr));
-
-    if (connect_result == 0) {
-        closesocket(sock);
-        return 1;
-    }
-
-    if (WSAGetLastError() != WSAEWOULDBLOCK) {
-        closesocket(sock);
-        return 0;
-    }
 #else
-    int sock = socket(AF_INET, SOCK_DGRAM, 0);
+    int sock = socket(family, SOCK_DGRAM, 0);
     if (sock < 0) return 0;
-
     fcntl(sock, F_SETFL, O_NONBLOCK);
+#endif
 
-    struct sockaddr_in test_addr;
+    struct sockaddr_storage test_addr;
+    socklen_t addr_len;
     memset(&test_addr, 0, sizeof(test_addr));
-    test_addr.sin_family = AF_INET;
-    test_addr.sin_port = htons(53);
-    inet_pton(AF_INET, "8.8.8.8", &test_addr.sin_addr);
 
-    int connect_result = connect(sock, (struct sockaddr*)&test_addr, sizeof(test_addr));
-
-    if (connect_result == 0) {
-        close(sock);
-        return 1;
+    if (family == AF_INET) {
+        struct sockaddr_in *a = (struct sockaddr_in *)&test_addr;
+        a->sin_family = AF_INET;
+        a->sin_port = htons(53);
+        inet_pton(AF_INET, addr_str, &a->sin_addr);
+        addr_len = sizeof(struct sockaddr_in);
+    } else {
+        struct sockaddr_in6 *a = (struct sockaddr_in6 *)&test_addr;
+        a->sin6_family = AF_INET6;
+        a->sin6_port = htons(53);
+        inet_pton(AF_INET6, addr_str, &a->sin6_addr);
+        addr_len = sizeof(struct sockaddr_in6);
     }
 
-    if (errno != EINPROGRESS) {
-        close(sock);
-        return 0;
-    }
+    int connect_result = connect(sock, (struct sockaddr*)&test_addr, addr_len);
+
+#ifdef _WIN32
+    if (connect_result == 0) { closesocket(sock); return 1; }
+    if (WSAGetLastError() != WSAEWOULDBLOCK) { closesocket(sock); return 0; }
+#else
+    if (connect_result == 0) { close(sock); return 1; }
+    if (errno != EINPROGRESS) { close(sock); return 0; }
 #endif
 
     fd_set write_fds;
@@ -413,106 +383,27 @@ static int test_ipv4_connectivity() {
     FD_SET(sock, &write_fds);
 
     int result = select(sock + 1, NULL, &write_fds, NULL, &timeout);
-
+    int ret = 0;
     if (result > 0) {
         int error = 0;
         socklen_t len = sizeof(error);
 #ifdef _WIN32
         getsockopt(sock, SOL_SOCKET, SO_ERROR, (char*)&error, &len);
-        closesocket(sock);
 #else
         getsockopt(sock, SOL_SOCKET, SO_ERROR, &error, &len);
-        close(sock);
 #endif
-        return (error == 0);
+        ret = (error == 0);
     }
-
 #ifdef _WIN32
     closesocket(sock);
 #else
     close(sock);
 #endif
-    return 0;
+    return ret;
 }
 
-/* IPv6 connectivity test */
-static int test_ipv6_connectivity() {
-#ifdef _WIN32
-    SOCKET sock = socket(AF_INET6, SOCK_DGRAM, 0);
-    if (sock == INVALID_SOCKET) return 0;
-
-    u_long mode = 1; /* 1 = non-blocking */
-    ioctlsocket(sock, FIONBIO, &mode);
-
-    struct sockaddr_in6 test_addr;
-    memset(&test_addr, 0, sizeof(test_addr));
-    test_addr.sin6_family = AF_INET6;
-    test_addr.sin6_port = htons(53);
-    inet_pton(AF_INET6, "2001:4860:4860::8888", &test_addr.sin6_addr);
-
-    int connect_result = connect(sock, (struct sockaddr*)&test_addr, sizeof(test_addr));
-
-    if (connect_result == 0) {
-        closesocket(sock);
-        return 1;
-    }
-
-    if (WSAGetLastError() != WSAEWOULDBLOCK) {
-        closesocket(sock);
-        return 0;
-    }
-#else
-    int sock = socket(AF_INET6, SOCK_DGRAM, 0);
-    if (sock < 0) return 0;
-
-    fcntl(sock, F_SETFL, O_NONBLOCK);
-
-    struct sockaddr_in6 test_addr;
-    memset(&test_addr, 0, sizeof(test_addr));
-    test_addr.sin6_family = AF_INET6;
-    test_addr.sin6_port = htons(53);
-    inet_pton(AF_INET6, "2001:4860:4860::8888", &test_addr.sin6_addr);
-
-    int connect_result = connect(sock, (struct sockaddr*)&test_addr, sizeof(test_addr));
-
-    if (connect_result == 0) {
-        close(sock);
-        return 1;
-    }
-
-    if (errno != EINPROGRESS) {
-        close(sock);
-        return 0;
-    }
-#endif
-
-    fd_set write_fds;
-    struct timeval timeout = {1, 0};
-    FD_ZERO(&write_fds);
-    FD_SET(sock, &write_fds);
-
-    int result = select(sock + 1, NULL, &write_fds, NULL, &timeout);
-
-    if (result > 0) {
-        int error = 0;
-        socklen_t len = sizeof(error);
-#ifdef _WIN32
-        getsockopt(sock, SOL_SOCKET, SO_ERROR, (char*)&error, &len);
-        closesocket(sock);
-#else
-        getsockopt(sock, SOL_SOCKET, SO_ERROR, &error, &len);
-        close(sock);
-#endif
-        return (error == 0);
-    }
-
-#ifdef _WIN32
-    closesocket(sock);
-#else
-    close(sock);
-#endif
-    return 0;
-}
+static int test_ipv4_connectivity() { return test_connectivity(AF_INET,  "8.8.8.8"); }
+static int test_ipv6_connectivity() { return test_connectivity(AF_INET6, "2001:4860:4860::8888"); }
 
 /** Initialise the supernode structure */
 static int init_sn( n2n_sn_t * sss )
@@ -656,7 +547,7 @@ static int update_edge( n2n_sn_t * sss,
 
         {
             struct in_addr vip_addr;
-            vip_addr.s_addr = scan->assigned_ip;
+            vip_addr.s_addr = htonl(scan->assigned_ip);
             traceEvent( TRACE_NORMAL, "update_edge created   %s vip=%s ==> %s%s",
                         macaddr_str( mac_buf, edgeMac ),
                         inet_ntoa(vip_addr),
@@ -1150,31 +1041,6 @@ static int try_broadcast( n2n_sn_t * sss,
     return 0;
 }
 
-static unsigned int count_communities(struct peer_info *edges)
-{
-    struct peer_info *list = edges;
-    n2n_community_t communities[256];
-    unsigned int count = 0;
-
-    while (list && count < 256) {
-        int found = 0;
-        for (unsigned int i = 0; i < count; i++) {
-            if (memcmp(communities[i], list->community_name, sizeof(n2n_community_t)) == 0) {
-                found = 1;
-                break;
-            }
-        }
-        if (!found) {
-            memcpy(communities[count], list->community_name, sizeof(n2n_community_t));
-            count++;
-        }
-        list = list->next;
-    }
-
-    return count;
-}
-
-
 /** Examine a datagram and determine what to do with it.
  *
  */
@@ -1323,17 +1189,6 @@ static int process_udp( n2n_sn_t * sss,
             }
         }
 
-        /* Update version/os_name in peer record from REGISTER packet */
-        {
-            struct peer_info *p = find_peer_by_mac(sss->edges, reg.srcMac);
-            if (p) {
-                if (reg.version[0] != '\0')
-                    strncpy(p->version, reg.version, sizeof(p->version) - 1);
-                if (reg.os_name[0] != '\0')
-                    strncpy(p->os_name, reg.os_name, sizeof(p->os_name) - 1);
-            }
-        }
-
         unicast = (0 == is_multi_broadcast(reg.dstMac) );
 
         if ( unicast )
@@ -1391,6 +1246,25 @@ static int process_udp( n2n_sn_t * sss,
     {
         traceEvent( TRACE_DEBUG, "Rx REGISTER_ACK (NOT IMPLEMENTED) Should not be via supernode" );
     }
+    else if ( msg_type == n2n_deregister )
+    {
+        n2n_DEREGISTER_t dereg;
+        decode_DEREGISTER( &dereg, &cmn, udp_buf, &rem, &idx );
+
+        traceEvent( TRACE_INFO, "Rx DEREGISTER from %s", macaddr_str((char[N2N_MACSTR_SIZE]){0}, dereg.srcMac) );
+
+        struct peer_info *prev = NULL, *scan = sss->edges;
+        while (scan) {
+            if (memcmp(scan->mac_addr, dereg.srcMac, N2N_MAC_SIZE) == 0) {
+                if (prev) prev->next = scan->next;
+                else sss->edges = scan->next;
+                free(scan);
+                break;
+            }
+            prev = scan;
+            scan = scan->next;
+        }
+    }
     else if ( msg_type == n2n_probe_ack )
     {
         /* Edge sends PROBE_ACK via supernode to deliver observed addr to the probe sender.
@@ -1429,8 +1303,11 @@ static int process_udp( n2n_sn_t * sss,
                 pi.sockets[1] = target->sockets[1];
 
             encode_PEER_INFO( encbuf, &encx, &cmn2, &pi );
-            sendto( sss->sock, encbuf, encx, 0,
-                    sender_sock, sizeof(struct sockaddr_in) );
+            {
+                SOCKET send_sock = (sender_sock->sa_family == AF_INET6) ? sss->sock6 : sss->sock;
+                socklen_t slen = (sender_sock->sa_family == AF_INET6) ? sizeof(struct sockaddr_in6) : sizeof(struct sockaddr_in);
+                sendto( send_sock, encbuf, encx, 0, sender_sock, slen );
+            }
         }
     }
     else if ( msg_type == MSG_TYPE_REGISTER_SUPER )
@@ -1672,10 +1549,10 @@ int main( int argc, char * const argv[] )
                 sss.daemon = 0;
                 break;
             case '4':
-                ipv4 = true;
+                ipv6 = false;
                 break;
             case '6':
-                ipv6 = true;
+                ipv4 = false;
                 break;
             case 'h': /* help */
                 help(argc, argv);

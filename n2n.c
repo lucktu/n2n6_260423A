@@ -60,6 +60,7 @@ SOCKET open_socket(uint16_t local_port, int bind_any) {
 
     if(bind(sock_fd, (struct sockaddr*) &local_address, sizeof(local_address)) == -1) {
         traceEvent(TRACE_ERROR, "Bind error [%s]\n", strerror(errno));
+        closesocket(sock_fd);
         return -1;
     }
 
@@ -93,6 +94,7 @@ SOCKET open_socket6(uint16_t local_port, int bind_any) {
 
     if(bind(sock_fd, (struct sockaddr*) &local_address, sizeof(local_address)) == -1) {
         traceEvent(TRACE_ERROR, "Bind error [%s]\n", strerror(errno));
+        closesocket(sock_fd);
         return -1;
     }
 

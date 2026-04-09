@@ -231,6 +231,9 @@ struct peer_info {
     time_t              punch_reset_time;
     time_t              lan_punch_start;   /* when LAN punch started, 0=not started */
     uint8_t             lan_punch_done;    /* 1=LAN succeeded or timed out, proceed to WAN */
+    time_t              last_probe_sent;   /* time last keepalive PROBE was sent */
+    uint8_t             keepalive_fails;   /* consecutive keepalive failures */
+    time_t              last_query_sent;   /* time last query_peer was sent, for rate-limiting */
 };
 
 struct n2n_edge; /* defined in edge.c */

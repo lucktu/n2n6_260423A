@@ -288,6 +288,29 @@ size_t decode_REGISTER( n2n_REGISTER_t * reg,
     return retval;
 }
 
+size_t encode_DEREGISTER( uint8_t * base,
+                     size_t * idx,
+                     const n2n_common_t * common,
+                     const n2n_DEREGISTER_t * reg )
+{
+    size_t retval=0;
+    retval += encode_common( base, idx, common );
+    retval += encode_mac( base, idx, reg->srcMac );
+    return retval;
+}
+
+size_t decode_DEREGISTER( n2n_DEREGISTER_t * reg,
+                     const n2n_common_t * cmn,
+                     const uint8_t * base,
+                     size_t * rem,
+                     size_t * idx )
+{
+    size_t retval=0;
+    memset( reg, 0, sizeof(n2n_DEREGISTER_t) );
+    retval += decode_mac( reg->srcMac, base, rem, idx );
+    return retval;
+}
+
 size_t encode_REGISTER_SUPER( uint8_t * base,
                            size_t * idx,
                            const n2n_common_t * common,

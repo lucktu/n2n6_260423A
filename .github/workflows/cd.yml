@@ -10,6 +10,7 @@ concurrency:
 
 env:
   TZ: Asia/Shanghai
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 permissions:
   contents: write
@@ -143,7 +144,7 @@ jobs:
 
       - name: Setup MSVC environment
         if: runner.os == 'windows'
-        uses: ilammy/msvc-dev-cmd@v1
+        uses: ilammy/msvc-dev-cmd@v1.13.0
         with:
           arch: ${{ matrix.MSVC_ARCH }}
 
@@ -168,7 +169,7 @@ jobs:
       - name: Restore OpenSSL cache
         if: endsWith(matrix.TARGET, '_AES')
         id: cache-openssl
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ${{ env.OPENSSL_PREFIX }}
           key: openssl-${{ matrix.TARGET }}-cache
@@ -291,7 +292,7 @@ jobs:
 
       - name: Install UPX
         if: runner.os == 'Linux' && !contains(matrix.TARGET, 'windows') && !contains(matrix.TARGET, 'apple-darwin')
-        uses: crazy-max/ghaction-upx@v3
+        uses: crazy-max/ghaction-upx@v4
         with:
           version: v4.2.4
           install-only: true
@@ -354,13 +355,13 @@ jobs:
 
       - name: Save OpenSSL cache
         if: steps.cache-openssl.outputs.cache-hit != 'true' && endsWith(matrix.TARGET, '_AES')
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v5
         with:
           path: ${{ env.OPENSSL_PREFIX }}
           key: ${{ steps.cache-key.outputs.CACHE_KEY }}
 
       - name: Delete workflow
-        uses: GitRML/delete-workflow-runs@main
+        uses: Mattraks/delete-workflow-runs@v2
         with:
          token: ${{ secrets.GITHUB_TOKEN }}
          retain_days: 2
