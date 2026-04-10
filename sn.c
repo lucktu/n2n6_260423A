@@ -1308,6 +1308,42 @@ static int process_udp( n2n_sn_t * sss,
                 socklen_t slen = (sender_sock->sa_family == AF_INET6) ? sizeof(struct sockaddr_in6) : sizeof(struct sockaddr_in);
                 sendto( send_sock, encbuf, encx, 0, sender_sock, slen );
             }
+
+            /* Simultaneous open: also push A's address to B so B punches back */
+            struct peer_info *requester = find_peer_by_mac( sss->edges, query.srcMac );
+            if ( requester )
+            {
+                n2n_PEER_INFO_t pi2;
+                n2n_common_t    cmn3;
+                uint8_t         encbuf2[N2N_SN_PKTBUF_SIZE];
+                size_t          encx2 = 0;
+                struct sockaddr_storage b_addr;
+                socklen_t b_len = sizeof(b_addr);
+
+                memset( &cmn3, 0, sizeof(cmn3) );
+                cmn3.ttl   = N2N_DEFAULT_TTL;
+                cmn3.pc    = n2n_peer_info;
+                cmn3.flags = N2N_FLAGS_FROM_SUPERNODE;
+                memcpy( cmn3.community, cmn.community, sizeof(n2n_community_t) );
+
+                memcpy( pi2.mac, query.srcMac, N2N_MAC_SIZE );
+                pi2.aflags = (requester->num_sockets > 1 &&
+                              requester->sockets[1].family != 0 &&
+                              requester->sockets[1].port != 0) ? N2N_AFLAGS_LOCAL_SOCKET : 0;
+                pi2.sockets[0] = requester->sockets[0];
+                if (pi2.aflags & N2N_AFLAGS_LOCAL_SOCKET)
+                    pi2.sockets[1] = requester->sockets[1];
+
+                encode_PEER_INFO( encbuf2, &encx2, &cmn3, &pi2 );
+                /* Send to B via appropriate socket */
+                if ( fill_sockaddr((struct sockaddr*)&b_addr, b_len, &target->sockets[0]) == 0 ) {
+                    SOCKET send_sock2 = (target->sockets[0].family == AF_INET6) ? sss->sock6 : sss->sock;
+                    socklen_t slen2 = (target->sockets[0].family == AF_INET6) ? sizeof(struct sockaddr_in6) : sizeof(struct sockaddr_in);
+                    sendto( send_sock2, encbuf2, encx2, 0, (struct sockaddr*)&b_addr, slen2 );
+                    traceEvent(TRACE_DEBUG, "Simultaneous open: pushed A's addr to B for %s",
+                               macaddr_str((char[N2N_MACSTR_SIZE]){0}, query.targetMac));
+                }
+            }
         }
     }
     else if ( msg_type == MSG_TYPE_REGISTER_SUPER )

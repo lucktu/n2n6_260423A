@@ -135,6 +135,7 @@ ssize_t encode_common( uint8_t * base,
                    size_t * idx,
                    const n2n_common_t * common )
 {
+    size_t idx0 = *idx;
     uint16_t flags=0;
     encode_uint8( base, idx, N2N_PKT_VERSION );
     encode_uint8( base, idx, common->ttl );
@@ -145,7 +146,7 @@ ssize_t encode_common( uint8_t * base,
     encode_uint16( base, idx, flags );
     encode_buf( base, idx, common->community, N2N_COMMUNITY_SIZE );
 
-    return -1;
+    return (ssize_t)(*idx - idx0);
 }
 
 ssize_t decode_common( n2n_common_t * out,
@@ -211,7 +212,7 @@ ssize_t decode_sock( n2n_sock_t * sock,
                  size_t * rem,
                  size_t * idx )
 {
-    size_t * idx0=idx;
+    size_t idx0 = *idx;
     uint16_t f;
 
     decode_uint16( &f, base, rem, idx );
@@ -232,7 +233,7 @@ ssize_t decode_sock( n2n_sock_t * sock,
         decode_buf( sock->addr.v4, IPV4_SIZE, base, rem, idx );
     }
 
-    return (idx-idx0);
+    return (ssize_t)(*idx - idx0);
 }
 
 size_t encode_REGISTER( uint8_t * base,

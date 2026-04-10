@@ -257,7 +257,6 @@ static int readConfFile(const char * filename, char * const linebuffer) {
         }
         /* Calculate the current length and remaining space */
         size_t line_len = strlen(linebuffer);
-        size_t line_buffer_len = strlen(buffer);
 
         /* Check if there is enough space */
         if (line_len + buf_len + 2 <= MAX_CMDLINE_BUFFER_LENGTH) {
@@ -541,7 +540,7 @@ static int n2n_tick_transop( n2n_edge_t * eee, time_t now )
         trop = N2N_TRANSOP_AESCBC_IDX;
     }
 
-    tst = (eee->transop[N2N_TRANSOP_SPECK_IDX].tick)( &(eee->transop[N2N_TRANSOP_SPECK_IDX]), now );  /* Add this line */
+    tst = (eee->transop[N2N_TRANSOP_SPECK_IDX].tick)( &(eee->transop[N2N_TRANSOP_SPECK_IDX]), now );
     if ( tst.can_tx )
     {
         traceEvent( TRACE_DEBUG, "can_tx SPECK (idx=%u)", (unsigned int)N2N_TRANSOP_SPECK_IDX );
@@ -1025,6 +1024,7 @@ static void start_punch( n2n_edge_t * eee, struct peer_info * peer )
          same_public_ip(&eee->my_public_sock, &peer->sock) ) return;
 
     peer->punch_start_time = time(NULL);
+    peer->last_punch_probe = peer->punch_start_time;
     send_probe(eee, &peer->sock, peer->mac_addr);
     traceEvent(TRACE_INFO, "hole-punch started for %s",
                macaddr_str((char[N2N_MACSTR_SIZE]){0}, peer->mac_addr));
@@ -1057,6 +1057,14 @@ static void check_punch_timeouts( n2n_edge_t * eee, time_t now )
             scan->punch_reset_time = now;
             traceEvent(TRACE_NORMAL, "PsP (supernode relay) for %s - P2P punch timeout",
                        macaddr_str((char[N2N_MACSTR_SIZE]){0}, scan->mac_addr));
+        } else if ( scan->punch_start_time != 0 &&
+                    !scan->punch_failed &&
+                    (now - scan->punch_start_time) <= 5 &&
+                    (now - scan->last_punch_probe) >= 1 )
+        {
+            /* Retransmit PROBE every 1s for first 5s to improve NAT punch success */
+            send_probe(eee, &scan->sock, scan->mac_addr);
+            scan->last_punch_probe = now;
         } else if ( scan->punch_failed &&
                     (now - scan->punch_reset_time) > 300 )
         {
@@ -1565,12 +1573,6 @@ static void update_supernode_reg( n2n_edge_t * eee, time_t nowTime )
         --(eee->sup_attempts);
     }
 
-    if (0 == eee->sup_attempts) {
-        traceEvent(TRACE_INFO, "Supernode registration attempts exhausted; forcing DNS re-resolution");
-        supernode2addr(&(eee->supernode), eee->sn_af, eee->sn_ip_array[eee->sn_idx]);
-        eee->sup_attempts = N2N_EDGE_SUP_ATTEMPTS;
-    }
-
     if(eee->re_resolve_supernode_ip)
     {
         supernode2addr(&(eee->supernode), eee->sn_af, eee->sn_ip_array[eee->sn_idx] );
@@ -2010,7 +2012,14 @@ static void readFromMgmtSocket(n2n_edge_t *eee, int *keep_running) {
             traceEvent( TRACE_INFO, "mgmt pkg from %s", ((struct sockaddr_un*) &sender_sock)->sun_path );
         } else {
 #endif
-            traceEvent( TRACE_INFO, "mgmt pkg from %s", sock_to_cstr(addr_buffer, (n2n_sock_t*) &sender_sock));
+            {
+                char tmp[INET6_ADDRSTRLEN] = "unknown";
+                if (((struct sockaddr*)&sender_sock)->sa_family == AF_INET)
+                    inet_ntop(AF_INET, &((struct sockaddr_in*)&sender_sock)->sin_addr, tmp, sizeof(tmp));
+                else if (((struct sockaddr*)&sender_sock)->sa_family == AF_INET6)
+                    inet_ntop(AF_INET6, &((struct sockaddr_in6*)&sender_sock)->sin6_addr, tmp, sizeof(tmp));
+                traceEvent( TRACE_INFO, "mgmt pkg from %s", tmp);
+            }
 #ifndef _WIN32
         }
 #endif
@@ -3436,39 +3445,24 @@ if (argc > 1 && argv[1][0] != '-' && access(argv[1], R_OK) == 0) {
 
     while (supernode2addr( &(eee.supernode), eee.sn_af, eee.sn_ip_array[eee.sn_idx] ) != 0) {
         // could not resolve IP, sleep and try again
-
-        if (supernode2addr( &(eee.supernode), eee.sn_af, eee.sn_ip_array[eee.sn_idx] ) == 0)
-        {
-            /* Check if it is a domain name (not an IP address) */
-            char *supernode_host = eee.sn_ip_array[eee.sn_idx];
-            int is_domain = 0;
-
-            /* Attempt to resolve to IPv4 */
-            struct in_addr ipv4_addr;
-            if (inet_pton(AF_INET, supernode_host, &ipv4_addr) != 1)
-            {
-                /* Attempt to resolve to IPv6 */
-                struct in6_addr ipv6_addr;
-                if (inet_pton(AF_INET6, supernode_host, &ipv6_addr) != 1)
-                {
-                    /* It's not an IP address, it's a domain name */
-                    is_domain = 1;
-                }
-            }
-
-            /* If it's a domain name, automatically enable periodic DNS resolution */
-            if (is_domain)
-            {
-                eee.re_resolve_supernode_ip = 1;
-                traceEvent(TRACE_INFO, "Supernode address '%s' is a domain name, enabling periodic resolution", supernode_host);
-            }
-        }
-
 #ifdef _WIN32
         Sleep(5000);
 #else
         sleep(5);
 #endif
+    }
+
+    /* Check if supernode address is a domain name, enable periodic re-resolution */
+    {
+        char *supernode_host = eee.sn_ip_array[eee.sn_idx];
+        struct in_addr ipv4_addr;
+        struct in6_addr ipv6_addr;
+        if (inet_pton(AF_INET, supernode_host, &ipv4_addr) != 1 &&
+            inet_pton(AF_INET6, supernode_host, &ipv6_addr) != 1)
+        {
+            eee.re_resolve_supernode_ip = 1;
+            traceEvent(TRACE_INFO, "Supernode '%s' is a domain name, enabling periodic resolution", supernode_host);
+        }
     }
 
     if ( (NULL == encrypt_key ) && ( 0 == strlen(eee.keyschedule)) ) {
