@@ -220,6 +220,7 @@ struct peer_info {
     n2n_community_t     community_name;
     n2n_mac_t           mac_addr;
     n2n_sock_t          sock;              /* primary (public) address */
+    n2n_sock_t          sock6;             /* IPv6 public address (family=0 if unavailable) */
     int                 num_sockets;       /* 1=public only, 2=public+LAN */
     n2n_sock_t          sockets[2];        /* [0]=public, [1]=LAN */
     time_t              last_seen;

@@ -370,10 +370,12 @@ size_t decode_PACKET( n2n_PACKET_t * pkt,
                    size_t * idx );
 
 /* PEER_INFO: supernode -> edge, push a peer's address */
+#define N2N_AFLAGS_IPV6_SOCKET   0x0002  /* sock6 field is valid */
 typedef struct n2n_PEER_INFO {
-    uint16_t   aflags;       /* N2N_AFLAGS_LOCAL_SOCKET if sockets[1] valid */
+    uint16_t   aflags;       /* N2N_AFLAGS_LOCAL_SOCKET if sockets[1] valid, N2N_AFLAGS_IPV6_SOCKET if sock6 valid */
     n2n_mac_t  mac;
-    n2n_sock_t sockets[2];  /* [0]=public, [1]=LAN (if aflags set) */
+    n2n_sock_t sockets[2];  /* [0]=public IPv4, [1]=LAN (if aflags set) */
+    n2n_sock_t sock6;       /* IPv6 public address (if N2N_AFLAGS_IPV6_SOCKET set) */
 } n2n_PEER_INFO_t;
 
 size_t encode_PEER_INFO( uint8_t * base, size_t * idx,

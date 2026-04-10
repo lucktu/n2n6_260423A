@@ -522,6 +522,11 @@ static int update_edge( n2n_sn_t * sss,
         memcpy(scan->community_name, community, sizeof(n2n_community_t) );
         memcpy(&(scan->mac_addr), edgeMac, sizeof(n2n_mac_t));
         memcpy(&(scan->sock), sender_sock, sizeof(n2n_sock_t));
+        /* Also record in the appropriate typed slot */
+        if (sender_sock->family == AF_INET6)
+            memcpy(&(scan->sock6), sender_sock, sizeof(n2n_sock_t));
+        else
+            memset(&(scan->sock6), 0, sizeof(n2n_sock_t));
 
         if (version) {
             strncpy(scan->version, version, sizeof(scan->version) - 1);
@@ -566,6 +571,10 @@ static int update_edge( n2n_sn_t * sss,
         {
             memcpy(scan->community_name, community, sizeof(n2n_community_t) );
             memcpy(&(scan->sock), sender_sock, sizeof(n2n_sock_t));
+            if (sender_sock->family == AF_INET6)
+                memcpy(&(scan->sock6), sender_sock, sizeof(n2n_sock_t));
+            else if (scan->sock6.family == 0)
+                memset(&(scan->sock6), 0, sizeof(n2n_sock_t));
 
             if (version) {
                 strncpy(scan->version, version, sizeof(scan->version) - 1);
@@ -1301,6 +1310,10 @@ static int process_udp( n2n_sn_t * sss,
             pi.sockets[0] = target->sockets[0];
             if (pi.aflags & N2N_AFLAGS_LOCAL_SOCKET)
                 pi.sockets[1] = target->sockets[1];
+            if (target->sock6.family == AF_INET6) {
+                pi.aflags |= N2N_AFLAGS_IPV6_SOCKET;
+                pi.sock6 = target->sock6;
+            }
 
             encode_PEER_INFO( encbuf, &encx, &cmn2, &pi );
             {

@@ -1372,6 +1372,8 @@ void set_peer_operational( n2n_edge_t * eee,
         eee->known_peers = scan;
 
         scan->sock = *peer;
+        if (peer->family == AF_INET6)
+            scan->sock6 = *peer;
         scan->last_seen = time(NULL);
         scan->punch_start_time = 0;  /* stop punch activity */
         scan->punch_failed = 0;
@@ -1616,7 +1618,11 @@ static int find_peer_destination(n2n_edge_t * eee,
             if (scan->last_probe_sent > 0) {
                 break; /* retval stays 0, use supernode as fallback */
             }
-            memcpy(destination, &scan->sock, sizeof(n2n_sock_t));
+            /* Prefer IPv6 if both sides connected via IPv6 */
+            if (scan->sock6.family == AF_INET6 && eee->supernode.family == AF_INET6)
+                memcpy(destination, &scan->sock6, sizeof(n2n_sock_t));
+            else
+                memcpy(destination, &scan->sock, sizeof(n2n_sock_t));
             retval=1;
             break;
         }
@@ -2520,8 +2526,16 @@ static void readFromIPSocket( n2n_edge_t * eee )
             PEERS_LOCK(eee);
             struct peer_info *known = find_peer_by_mac(eee->known_peers, pi.mac);
             if (!known) {
-                /* New peer: start hole-punch */
-                if ((pi.aflags & N2N_AFLAGS_LOCAL_SOCKET) &&
+                /* New peer: IPv6 preferred if both sides have it */
+                if ((pi.aflags & N2N_AFLAGS_IPV6_SOCKET) &&
+                    pi.sock6.family == AF_INET6 &&
+                    eee->supernode.family == AF_INET6)
+                {
+                    traceEvent(TRACE_NORMAL, "IPv6 direct: trying %s",
+                               sock_to_cstr(sockbuf1, &pi.sock6));
+                    try_send_register(eee, 1, pi.mac, &pi.sock6);
+                }
+                else if ((pi.aflags & N2N_AFLAGS_LOCAL_SOCKET) &&
                     pi.sockets[1].family != 0 && pi.sockets[1].port != 0 &&
                     eee->my_public_sock.family == AF_INET &&
                     pi.sockets[0].family == AF_INET &&
@@ -2552,7 +2566,15 @@ static void readFromIPSocket( n2n_edge_t * eee )
                     free(scan);
                 }
                 /* Re-punch with new address */
-                if ((pi.aflags & N2N_AFLAGS_LOCAL_SOCKET) &&
+                if ((pi.aflags & N2N_AFLAGS_IPV6_SOCKET) &&
+                    pi.sock6.family == AF_INET6 &&
+                    eee->supernode.family == AF_INET6)
+                {
+                    traceEvent(TRACE_NORMAL, "IPv6 direct re-punch: %s",
+                               sock_to_cstr(sockbuf1, &pi.sock6));
+                    try_send_register(eee, 1, pi.mac, &pi.sock6);
+                }
+                else if ((pi.aflags & N2N_AFLAGS_LOCAL_SOCKET) &&
                     pi.sockets[1].family != 0 && pi.sockets[1].port != 0 &&
                     eee->my_public_sock.family == AF_INET &&
                     pi.sockets[0].family == AF_INET &&

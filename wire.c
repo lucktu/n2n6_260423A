@@ -595,6 +595,8 @@ size_t encode_PEER_INFO( uint8_t * base, size_t * idx,
     retval += encode_sock( base, idx, &pkt->sockets[0] );
     if ( pkt->aflags & N2N_AFLAGS_LOCAL_SOCKET )
         retval += encode_sock( base, idx, &pkt->sockets[1] );
+    if ( pkt->aflags & N2N_AFLAGS_IPV6_SOCKET )
+        retval += encode_sock( base, idx, &pkt->sock6 );
     return retval;
 }
 
@@ -610,6 +612,8 @@ size_t decode_PEER_INFO( n2n_PEER_INFO_t * pkt,
     retval += decode_sock( &pkt->sockets[0], base, rem, idx );
     if ( (pkt->aflags & N2N_AFLAGS_LOCAL_SOCKET) && *rem >= 8 )
         retval += decode_sock( &pkt->sockets[1], base, rem, idx );
+    if ( (pkt->aflags & N2N_AFLAGS_IPV6_SOCKET) && *rem >= 8 )
+        retval += decode_sock( &pkt->sock6, base, rem, idx );
     return retval;
 }
 
