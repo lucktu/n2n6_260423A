@@ -113,7 +113,10 @@ static inline void random_bytes(random_ctx_t ctx, uint8_t* buffer, size_t size) 
 #elif USE_ELL
     l_getrandom(buffer, (uint32_t) size);
 #elif USE_BCRYPT
-    BCryptGenRandom(ctx->hRandom, buffer, (uint32_t) size, 0);
+    if (ctx)
+        BCryptGenRandom(ctx->hRandom, buffer, (uint32_t) size, 0);
+    else
+        BCryptGenRandom(NULL, buffer, (uint32_t) size, BCRYPT_USE_SYSTEM_PREFERRED_RNG);
 #elif __unix__
     arc4random_buf(buffer, size);
 #endif
