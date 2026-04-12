@@ -1074,6 +1074,22 @@ static void check_punch_timeouts( n2n_edge_t * eee, time_t now )
                 send_probe(eee, &scan->sock, scan->mac_addr);
                 scan->last_punch_probe = now;
             }
+        } else if ( scan->punch_start_time == 0 && !scan->punch_failed &&
+                    scan->last_seen != 0 &&
+                    (now - scan->last_seen) > 1800 )
+        {
+            /* Stuck peer: start_punch() was skipped (e.g. family mismatch) and
+             * punch_start_time was never set, so the normal timeout path never
+             * fires.  Give up after 30 minutes. */
+            traceEvent(TRACE_NORMAL, "Removing stuck pending peer %s (no punch possible, idle %lus)",
+                       macaddr_str((char[N2N_MACSTR_SIZE]){0}, scan->mac_addr),
+                       (unsigned long)(now - scan->last_seen));
+            struct peer_info *tmp = scan;
+            if ( prev ) prev->next = scan->next;
+            else eee->pending_peers = scan->next;
+            scan = scan->next;
+            free(tmp);
+            continue;
         } else if ( scan->punch_failed &&
                     (now - scan->punch_reset_time) > 300 )
         {
