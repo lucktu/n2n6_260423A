@@ -23,119 +23,90 @@ jobs:
       fail-fast: false
       matrix:
         include:
-#          - target: apple-mac_AES
-#            os: macos-latest
-#          - target: apple-mac
-#            os: macos-latest
-
-          - target: x86_64-pc-windows_AES
+          - target: x86_64-pc-windows_static
             os: windows-latest
             ARCH: x64
-            OPENSSL_TARGET: VC-WIN64A
             MSVC_ARCH: x64
           - target: x86_64-pc-windows
             os: windows-latest
             ARCH: x64
-            OPENSSL_TARGET: VC-WIN64A
             MSVC_ARCH: x64
 
-          - target: i686-pc-windows_AES
+          - target: i686-pc-windows_static
             os: windows-latest
             ARCH: x86
-            OPENSSL_TARGET: VC-WIN32
             MSVC_ARCH: x86
           - target: i686-pc-windows
             os: windows-latest
             ARCH: x86
-            OPENSSL_TARGET: VC-WIN32
             MSVC_ARCH: x86
 
-          - target: aarch64-linux-musl_AES
+          - target: aarch64-linux-musl_static
             os: ubuntu-latest
             URL: aarch64-linux-musl
-            OPENSSL_TARGET: linux-aarch64
           - target: aarch64-linux-musl
             os: ubuntu-latest
             URL: aarch64-linux-musl
-            OPENSSL_TARGET: linux-aarch64
 
-          - target: x86_64-linux-musl_AES
+          - target: x86_64-linux-musl_static
             os: ubuntu-latest
             URL: x86_64-linux-musl
-            OPENSSL_TARGET: linux-x86_64
           - target: x86_64-linux-musl
             os: ubuntu-latest
             URL: x86_64-linux-musl
-            OPENSSL_TARGET: linux-x86_64
 
-          - target: i686-linux-musl_AES
+          - target: i686-linux-musl_static
             os: ubuntu-latest
             URL: i686-linux-musl
-            OPENSSL_TARGET: linux-generic32
           - target: i686-linux-musl
             os: ubuntu-latest
             URL: i686-linux-musl
-            OPENSSL_TARGET: linux-generic32
 
-          - target: armv7-linux-musleabihf_AES
+          - target: armv7-linux-musleabihf_static
             os: ubuntu-latest
             URL: armv7l-linux-musleabihf
-            OPENSSL_TARGET: linux-armv4
           - target: armv7-linux-musleabihf
             os: ubuntu-latest
             URL: armv7l-linux-musleabihf
-            OPENSSL_TARGET: linux-armv4
 
-          - target: armv7-linux-musleabi_AES
+          - target: armv7-linux-musleabi_static
             os: ubuntu-latest
             URL: armv7m-linux-musleabi
-            OPENSSL_TARGET: linux-armv4
           - target: armv7-linux-musleabi
             os: ubuntu-latest
             URL: armv7m-linux-musleabi
-            OPENSSL_TARGET: linux-armv4
 
-          - target: arm-linux-musleabihf_AES
+          - target: arm-linux-musleabihf_static
             os: ubuntu-latest
             URL: arm-linux-musleabihf
-            OPENSSL_TARGET: linux-armv4
           - target: arm-linux-musleabihf
             os: ubuntu-latest
             URL: arm-linux-musleabihf
-            OPENSSL_TARGET: linux-armv4
 
-          - target: arm-linux-musleabi_AES
+          - target: arm-linux-musleabi_static
             os: ubuntu-latest
             URL: arm-linux-musleabi
-            OPENSSL_TARGET: linux-armv4
           - target: arm-linux-musleabi
             os: ubuntu-latest
             URL: arm-linux-musleabi
-            OPENSSL_TARGET: linux-armv4
 
-          - target: mipsel-linux-musl_AES
+          - target: mipsel-linux-musl_static
             os: ubuntu-latest
             URL: mipsel-linux-muslsf
-            OPENSSL_TARGET: linux-mips32
           - target: mipsel-linux-musl
             os: ubuntu-latest
             URL: mipsel-linux-muslsf
-            OPENSSL_TARGET: linux-mips32
 
-          - target: mips-linux-musl_AES
+          - target: mips-linux-musl_static
             os: ubuntu-latest
             URL: mips-linux-muslsf
-            OPENSSL_TARGET: linux-mips32
           - target: mips-linux-musl
             os: ubuntu-latest
             URL: mips-linux-muslsf
-            OPENSSL_TARGET: linux-mips32
 
     runs-on: ${{ matrix.os }}
     env:
-      OPENSSL_TARGET: ${{ matrix.OPENSSL_TARGET }}
       TARGET: ${{ matrix.TARGET }}
-      OPENSSL_PREFIX:  ${{ github.workspace }}/openssl-${{ matrix.TARGET }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
@@ -148,85 +119,37 @@ jobs:
         with:
           arch: ${{ matrix.MSVC_ARCH }}
 
-      - name: Install Perl via Chocolatey
-        if: runner.os == 'windows'
+      - name: Windows build (static)
+        if: runner.os == 'windows' && endsWith(matrix.TARGET, '_static')
+        shell: pwsh
         run: |
-          choco install strawberryperl -y
-          echo "C:\Strawberry\perl\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          mkdir build
+          cd build
+          cmake .. `
+            -G "NMake Makefiles" `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_C_FLAGS_RELEASE="/MT /O2 /DWIN32 /D_WIN32_WINNT=0x0601" `
+            -DCMAKE_EXE_LINKER_FLAGS="/SUBSYSTEM:CONSOLE,6.01 /MACHINE:${{ matrix.ARCH }}" `
+            -DCMAKE_MSVC_RUNTIME_LIBRARY="MultiThreaded"
+          nmake
+          .\edge.exe -h || true
+          .\supernode.exe -h || true
 
-      - name: Install NASM
-        if: runner.os == 'windows'
+      - name: Windows build (dynamic)
+        if: runner.os == 'windows' && !endsWith(matrix.TARGET, '_static')
+        shell: pwsh
         run: |
-          choco install nasm -y
-          echo "C:\Program Files\NASM" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-
-      - name: Set cache key
-        if: runner.os == 'windows'
-        id: cache-key
-        run: |
-          echo "CACHE_KEY=openssl-${{ matrix.TARGET }}-cache" >> $GITHUB_OUTPUT
-
-      - name: Restore OpenSSL cache
-        if: runner.os == 'windows'
-        id: cache-openssl
-        uses: actions/cache@v5
-        with:
-          path: ${{ env.OPENSSL_PREFIX }}
-          key: openssl-${{ matrix.TARGET }}-cache
-          restore-keys: |
-            openssl-${{ matrix.TARGET }}-
-
-      - name: macOS build
-        if: runner.os == 'macOS'
-        run: |
-          set -euo pipefail
-          echo "Building macOS universal2: x86_64 + arm64"
-          if [[ "${TARGET}" == *_AES ]]; then
-            if [ -d "${OPENSSL_PREFIX}" ]; then
-              echo "OpenSSL already exists at ${OPENSSL_PREFIX}, skipping compilation"
-            else
-              git clone --depth 1 --branch OpenSSL_1_1_1-stable https://github.com/openssl/openssl openssl-src
-              cd openssl-src
-              COMMON_CONF="no-shared no-zlib"
-              echo "==== Starting x86_64 build ===="
-              export CC="clang -arch x86_64"
-              export CFLAGS="-O2 -arch x86_64 -mmacosx-version-min=10.13"
-              ./Configure darwin64-x86_64-cc ${COMMON_CONF} --prefix=${OPENSSL_PREFIX}/x86_64
-              make -j$(sysctl -n hw.ncpu)
-              make install_sw
-              make clean
-              echo "==== Starting arm64 build ===="
-              export CC="clang -arch arm64"
-              export CFLAGS="-O2 -arch arm64 -mmacosx-version-min=11.0"
-              ./Configure darwin64-arm64-cc ${COMMON_CONF} --prefix=${OPENSSL_PREFIX}/arm64
-              make -j$(sysctl -n hw.ncpu)
-              make install_sw
-              make clean
-              echo "==== Merging ===="
-              mkdir -p ${OPENSSL_PREFIX}/lib
-              mkdir -p ${OPENSSL_PREFIX}/include
-              lipo -create ${OPENSSL_PREFIX}/x86_64/lib/libcrypto.a ${OPENSSL_PREFIX}/arm64/lib/libcrypto.a -output ${OPENSSL_PREFIX}/lib/libcrypto.a
-              lipo -create ${OPENSSL_PREFIX}/x86_64/lib/libssl.a ${OPENSSL_PREFIX}/arm64/lib/libssl.a -output ${OPENSSL_PREFIX}/lib/libssl.a
-              cp -r ${OPENSSL_PREFIX}/arm64/include/openssl ${OPENSSL_PREFIX}/include/
-              cd ..
-            fi
-          fi
-          # AES switch
-          if [[ "${TARGET}" == *_AES ]]; then
-            AES_FLAGS="-DN2N_OPTION_AES=ON -DUSE_OPENSSL=1 -DOPENSSL_INCLUDE_DIR=${OPENSSL_PREFIX}/include -DOPENSSL_CRYPTO_LIBRARY=${OPENSSL_PREFIX}/lib/libcrypto.a"
-          else
-            AES_FLAGS="-DN2N_OPTION_AES=OFF"
-          fi
-          mkdir -p build && cd build
-          cmake .. \
-            -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_C_FLAGS="-Wno-deprecated-declarations -I${OPENSSL_PREFIX}/include" \
-            -DCMAKE_EXE_LINKER_FLAGS="-L${OPENSSL_PREFIX}/lib" \
-            ${AES_FLAGS}
-          make -j$(sysctl -n hw.ncpu)
-          ./edge -h || true
-          ./supernode -h || true
+          mkdir build
+          cd build
+          cmake .. `
+            -G "NMake Makefiles" `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_C_FLAGS_RELEASE="/MD /O2 /DWIN32 /D_WIN32_WINNT=0x0601" `
+            -DCMAKE_EXE_LINKER_FLAGS="/SUBSYSTEM:CONSOLE,6.01 /MACHINE:${{ matrix.ARCH }}" `
+            -DCMAKE_MSVC_RUNTIME_LIBRARY="MultiThreadedDLL"
+          nmake
+          .\edge.exe -h || true
+          .\supernode.exe -h || true
 
       - name: Download gcc
         if: runner.os == 'Linux'
@@ -236,133 +159,53 @@ jobs:
           static: true
           gccpath: /opt/musl_gcc
 
-      - name: Build Windows OpenSSL
-        if: steps.cache-openssl.outputs.cache-hit != 'true' && runner.os == 'windows'
-        shell: cmd
-        run: |
-          git clone --depth 1 --branch OpenSSL_1_1_1-stable https://github.com/openssl/openssl openssl-src
-          cd openssl-src
-
-          perl Configure ${{ matrix.OPENSSL_TARGET }} no-shared no-zlib --prefix=${{ env.OPENSSL_PREFIX }} --openssldir=${{ env.OPENSSL_PREFIX }}
-
-          nmake
-          nmake install_sw
-
-          cd ..
-
-      - name: Windows build (AES)
-        if: runner.os == 'windows' && endsWith(matrix.TARGET, '_AES')
-        shell: pwsh
-        run: |
-          mkdir build
-          cd build
-
-          cmake .. `
-            -G "NMake Makefiles" `
-            -DCMAKE_BUILD_TYPE=Release `
-            -DCMAKE_C_FLAGS_RELEASE="/MT /O2 /DWIN32 /D_WIN32_WINNT=0x0601" `
-            -DCMAKE_EXE_LINKER_FLAGS="/SUBSYSTEM:CONSOLE,6.01 /MACHINE:${{ matrix.ARCH }}" `
-            -DCMAKE_MSVC_RUNTIME_LIBRARY="MultiThreaded" `
-            -DN2N_OPTION_AES=ON `
-            -DUSE_OPENSSL=1 `
-            -DOPENSSL_INCLUDE_DIR="${{ env.OPENSSL_PREFIX }}\include" `
-            -DOPENSSL_CRYPTO_LIBRARY="${{ env.OPENSSL_PREFIX }}\lib\libcrypto.lib;Crypt32.lib"
-
-          nmake
-          .\edge.exe -h || true
-          .\supernode.exe -h
-      - name: Windows build
-        if: runner.os == 'windows' && !endsWith(matrix.TARGET, '_AES')
-        shell: pwsh
-        run: |
-          mkdir build
-          cd build
-          $AES_FLAGS = "-DN2N_OPTION_AES=OFF -DUSE_OPENSSL=1 -DBCRYPT_LIBRARY=bcrypt.lib"
-          cmake .. `
-            -G "NMake Makefiles" `
-            -DCMAKE_BUILD_TYPE=Release `
-            -DCMAKE_C_FLAGS_RELEASE="/MT /O2 /DWIN32 /D_WIN32_WINNT=0x0601" `
-            -DCMAKE_EXE_LINKER_FLAGS="/SUBSYSTEM:CONSOLE,6.01 /MACHINE:${{ matrix.ARCH }}" `
-            -DCMAKE_MSVC_RUNTIME_LIBRARY="MultiThreaded" `
-            $AES_FLAGS
-
-          nmake
-          .\edge.exe -h || true
-          .\supernode.exe -h
-
-      - name: Install UPX
-        if: runner.os == 'Linux' && !contains(matrix.TARGET, 'windows') && !contains(matrix.TARGET, 'apple-darwin')
-        uses: crazy-max/ghaction-upx@v4
-        with:
-          version: v4.2.4
-          install-only: true
-
-      - name: Linux build
-        if: runner.os == 'Linux' && !contains(matrix.TARGET, 'windows') && !contains(matrix.TARGET, 'apple-darwin')
+      - name: Linux build (static)
+        if: runner.os == 'Linux' && endsWith(matrix.TARGET, '_static')
         run: |
           sudo timedatectl set-timezone "Asia/Shanghai"
-
-          if [[ "${TARGET}" == *_AES ]]; then
-            if [ ! -d "${OPENSSL_PREFIX}" ]; then
-              git clone --recursive https://github.com/openssl/openssl -b OpenSSL_1_1_1-stable
-              cd openssl
-              ./Configure no-shared no-zlib --prefix=${OPENSSL_PREFIX}  ${{ env.OPENSSL_TARGET }} LDFLAGS="-static -I/opt/musl_gcc/${{ matrix.TARGET }}-cross/${{ matrix.TARGET }}/include -L/opt/musl_gcc/${{ matrix.TARGET }}-cross/${{ matrix.TARGET }}/lib" CFLAGS="-static -I/opt/musl_gcc/${{ matrix.TARGET }}-cross/${{ matrix.TARGET }}/include -L/opt/musl_gcc/${{ matrix.TARGET }}-cross/${{ matrix.TARGET }}/lib"
-              make -j$(nproc)
-              make install
-              cd ../
-            fi
-          fi
-
-          if [[ "${TARGET}" == *_AES ]]; then
-            AES_FLAGS="-DN2N_OPTION_AES=ON -DUSE_OPENSSL=1 -DOPENSSL_INCLUDE_DIR=${OPENSSL_PREFIX}/include -DOPENSSL_CRYPTO_LIBRARY=${OPENSSL_PREFIX}/lib/libcrypto.a"
-          else
-            AES_FLAGS="-DN2N_OPTION_AES=OFF"
-          fi
-
-          mkdir -p build
-          cd build
+          mkdir -p build && cd build
           cmake .. \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_C_FLAGS="-O2 -ffunction-sections -fdata-sections -fno-strict-aliasing -I${OPENSSL_PREFIX}/include" \
-            -DCMAKE_EXE_LINKER_FLAGS="-static -Wl,--gc-sections -static-libgcc -L${OPENSSL_PREFIX}/lib" \
-            -DCMAKE_C_COMPILER=${CC} \
-            ${AES_FLAGS}
+            -DCMAKE_C_FLAGS="-O2 -ffunction-sections -fdata-sections -fno-strict-aliasing" \
+            -DCMAKE_EXE_LINKER_FLAGS="-static -Wl,--gc-sections -static-libgcc" \
+            -DCMAKE_C_COMPILER=${CC}
           make -j$(nproc)
           ./edge -h || true
-          ./supernode -h || true
-
-          #View current directory files
           ls -la
-          #View edge binary file info
           file edge
-          #Strip
           $STRIP edge
           $STRIP supernode
+
+      - name: Linux build (dynamic)
+        if: runner.os == 'Linux' && !endsWith(matrix.TARGET, '_static')
+        run: |
+          sudo timedatectl set-timezone "Asia/Shanghai"
+          mkdir -p build && cd build
+          cmake .. \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_FLAGS="-O2 -ffunction-sections -fdata-sections -fno-strict-aliasing" \
+            -DCMAKE_EXE_LINKER_FLAGS="-Wl,--gc-sections" \
+            -DCMAKE_C_COMPILER=${CC}
+          make -j$(nproc)
+          ./edge -h || true
+          ls -la
           file edge
-          #Compress
-          upx --lzma --best edge || true
-          upx --lzma --best supernode || true
+          $STRIP edge
+          $STRIP supernode
 
       - name: Upload
         uses: actions/upload-artifact@master
         if: always()
         continue-on-error: true
         with:
-         name: N2N_ipv6-${{ env.TARGET }}
-         path: |
-           build/edge${{ runner.os == 'Windows' && '.exe' || '' }}
-           build/supernode${{ runner.os == 'Windows' && '.exe' || '' }}
-
-      - name: Save OpenSSL cache
-        if: steps.cache-openssl.outputs.cache-hit != 'true' && endsWith(matrix.TARGET, '_AES')
-        uses: actions/cache/save@v5
-        with:
-          path: ${{ env.OPENSSL_PREFIX }}
-          key: ${{ steps.cache-key.outputs.CACHE_KEY }}
+          name: ${{ env.TARGET }}
+          path: |
+            build/edge${{ runner.os == 'Windows' && '.exe' || '' }}
+            build/supernode${{ runner.os == 'Windows' && '.exe' || '' }}
 
       - name: Delete workflow
         uses: Mattraks/delete-workflow-runs@v2
         with:
-         token: ${{ secrets.GITHUB_TOKEN }}
-         retain_days: 2
-         keep_minimum_runs: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+          retain_days: 2
+          keep_minimum_runs: 0

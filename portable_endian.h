@@ -25,6 +25,10 @@ static inline uint64_t bswap_64(uint64_t x) {
 #define le64toh(x) (x)
 #define htole32(x) (x)
 #define le32toh(x) (x)
+#define htobe32(x) bswap_32(x)
+#define be32toh(x) bswap_32(x)
+#define htobe16(x) bswap_16(x)
+#define be16toh(x) bswap_16(x)
 
 #else
 /* Define htole64 and le64toh if not available */

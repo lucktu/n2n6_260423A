@@ -1,125 +1,89 @@
 /**
- * @brief Cryptographic random number generator
+ * @brief Random number generation for n2n
  *
- * @file random.h
- * @author Max Resch <resch.max@gmail.com>
+ * Uses XORSHIFT128+ (same as cnn2n) for platform-independent random numbers.
+ * No external crypto library dependency.
  */
 
 #ifndef N2N_RANDOM_H_
 #define N2N_RANDOM_H_
 
-#if __linux__
-// linux supports syscall random
-#ifdef HAVE_SYS_RANDOM_H
-#include <sys/random.h>
-#endif
-#elif __unix__
-// BSD has arc4random
-#include <stdlib.h>
-#endif
-
-#include <string.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
+#include <time.h>
 
-#if defined(_WIN32) && !defined(USE_BCRYPT)
-#define USE_BCRYPT 1
-#endif
-
-#if USE_OPENSSL
-#include <openssl/rand.h>
-#elif USE_NETTLE
-#include <nettle/yarrow.h>
-#elif USE_GCRYPT
-#include <gcrypt.h>
-#elif USE_MBEDTLS
-#include <mbedtls/ctr_drbg.h>
-#include <mbedtls/entropy.h>
-#include <mbedtls/entropy_poll.h>
-#elif USE_ELL
-#include <ell/random.h>
-#elif USE_BCRYPT
+/* Windows: use BCrypt only for the NULL-ctx path in edge.c (send_register_super) */
+#if defined(_WIN32)
 #include <windows.h>
 #include <bcrypt.h>
 #endif
 
-typedef struct random_ctx {
-#if USE_NETTLE
-    struct yarrow256_ctx     yarrow;
-#elif USE_MBEDTLS
-    mbedtls_entropy_context  entropy;
-    mbedtls_ctr_drbg_context random;
-#elif USE_BCRYPT
-    BCRYPT_ALG_HANDLE        hRandom;
+/* ---------- XORSHIFT128+ state (same as cnn2n) ---------- */
+typedef struct { uint64_t a, b; } n2n_rng_state_t;
+
+static n2n_rng_state_t _n2n_rng = {
+    0x9E3779B97F4A7C15ULL,
+    0xBF58476D1CE4E5B9ULL
+};
+
+static inline uint64_t n2n_rand(void) {
+    uint64_t t = _n2n_rng.a;
+    uint64_t s = _n2n_rng.b;
+    _n2n_rng.a = s;
+    t ^= t << 23;
+    t ^= t >> 17;
+    t ^= s ^ (s >> 26);
+    _n2n_rng.b = t;
+    return t + s;
+}
+
+static inline void n2n_srand(uint64_t seed) {
+    /* splitmix64 to initialise */
+    uint64_t z = seed + 0x9E3779B97F4A7C15ULL;
+    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
+    z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
+    _n2n_rng.a = z ^ (z >> 31);
+    z += 0x9E3779B97F4A7C15ULL;
+    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
+    z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
+    _n2n_rng.b = z ^ (z >> 31);
+    /* warm up */
+    for (int i = 0; i < 32; i++) n2n_rand();
+}
+
+/* ---------- random_bytes: fill buffer with random bytes ---------- */
+static inline void random_bytes_buf(uint8_t *buf, size_t n) {
+#if defined(_WIN32)
+    BCryptGenRandom(NULL, buf, (ULONG)n, BCRYPT_USE_SYSTEM_PREFERRED_RNG);
+#else
+    /* Use n2n_rand() - same approach as cnn2n */
+    size_t i = 0;
+    while (i + 8 <= n) {
+        uint64_t v = n2n_rand();
+        memcpy(buf + i, &v, 8);
+        i += 8;
+    }
+    if (i < n) {
+        uint64_t v = n2n_rand();
+        memcpy(buf + i, &v, n - i);
+    }
 #endif
-} *random_ctx_t;
+}
+
+/* ---------- Compatibility shim for old callers using random_ctx_t ---------- */
+struct random_ctx { int _unused; };  /* empty struct, RNG state is global */
+typedef struct random_ctx *random_ctx_t;
 
 static inline void random_init(random_ctx_t ctx) {
-#if USE_NETTLE
-    yarrow256_init(&ctx->yarrow, 0, NULL);
-    uint8_t rnd_data[YARROW256_SEED_FILE_SIZE];
-    #if __linux__
-    getrandom(rnd_data, YARROW256_SEED_FILE_SIZE, 0);
-    #else
-    arc4random_buf(rnd_data, YARROW256_SEED_FILE_SIZE);
-    #endif
-    yarrow256_seed(&ctx->yarrow, YARROW256_SEED_FILE_SIZE, rnd_data);
-#elif USE_MBEDTLS
-    mbedtls_ctr_drbg_init(&ctx->random);
-    mbedtls_entropy_init(&ctx->entropy);
-    mbedtls_entropy_add_source(&ctx->entropy, &mbedtls_platform_entropy_poll, NULL, 16, MBEDTLS_ENTROPY_SOURCE_STRONG);
-    mbedtls_ctr_drbg_seed(&ctx->random, &mbedtls_entropy_func, &ctx->entropy, NULL, 0);
-#elif USE_BCRYPT
-    BCryptOpenAlgorithmProvider (&ctx->hRandom, BCRYPT_RNG_ALGORITHM, NULL, 0);
-#endif
+    (void)ctx;
+    n2n_srand((uint64_t)time(NULL) ^ (uint64_t)(uintptr_t)&ctx);
+}
+static inline void random_free(random_ctx_t ctx) { (void)ctx; }
+
+static inline void random_bytes(random_ctx_t ctx, uint8_t *buf, size_t n) {
+    (void)ctx;
+    random_bytes_buf(buf, n);
 }
 
-static inline void random_free(random_ctx_t ctx) {
-#if USE_MBEDTLS
-    mbedtls_ctr_drbg_free(&ctx->random);
-    mbedtls_entropy_free(&ctx->entropy);
-#elif USE_BCRYPT
-    BCryptCloseAlgorithmProvider(ctx->hRandom, 0);
-#endif
-}
-
-#ifndef HAVE_ARC4RANDOM_BUF
-static inline void arc4random_buf(void *buf, size_t nbytes) {
-    uint8_t *p = (uint8_t *)buf;
-    size_t i;
-
-    static int seeded = 0;
-    if (!seeded) {
-        srand(time(NULL));
-        seeded = 1;
-    }
-
-    for (i = 0; i < nbytes; i++) {
-        p[i] = rand() & 0xFF;
-    }
-}
-#define HAVE_ARC4RANDOM_BUF 1
-#endif
-
-static inline void random_bytes(random_ctx_t ctx, uint8_t* buffer, size_t size) {
-#if USE_OPENSSL
-    RAND_bytes((void*) buffer, size);
-#elif USE_GCRYPT
-    gcry_create_nonce(buffer, size);
-#elif USE_NETTLE
-    yarrow256_random(&ctx->yarrow, size, buffer);
-#elif USE_MBEDTLS
-    mbedtls_ctr_drbg_random(&ctx->random, buffer, (uint32_t) size);
-#elif USE_ELL
-    l_getrandom(buffer, (uint32_t) size);
-#elif USE_BCRYPT
-    if (ctx)
-        BCryptGenRandom(ctx->hRandom, buffer, (uint32_t) size, 0);
-    else
-        BCryptGenRandom(NULL, buffer, (uint32_t) size, BCRYPT_USE_SYSTEM_PREFERRED_RNG);
-#elif __unix__
-    arc4random_buf(buffer, size);
-#endif
-}
-
-#endif // N2N_RANDOM_H_
+#endif /* N2N_RANDOM_H_ */

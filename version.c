@@ -1,7 +1,4 @@
 #include "n2n.h"
-#if USE_OPENSSL
-#include <openssl/crypto.h>
-#endif
 
 char * n2n_sw_version   = N2N_VERSION;
 char * n2n_sw_osName    = N2N_OSNAME;
@@ -12,28 +9,11 @@ void print_n2n_version() {
            "Built on %s\n",
            n2n_sw_version, n2n_sw_osName, n2n_sw_buildDate);
 #ifdef N2N_HAVE_AES
-#if USE_MBEDTLS
-        char mbed_version[10];
-        mbedtls_version_get_string(mbed_version);
+    printf("With AES provided by built-in (pure C)\n");
 #endif
-    printf("With AES provided by "
-#if USE_OPENSSL
-           "%s\n", OpenSSL_version(0)
-#elif USE_NETTLE
-           "nettle %d.%d\n", nettle_version_major(), nettle_version_minor()
-#elif USE_MBEDTLS
-           "mbed TLS %s\n", mbed_version
-#elif USE_GCRYPT
-           "libgcrypt %s\n", gcrypt_version
-#elif USE_ELL
-           "Embeded Linux Library\n"
-#elif USE_BCRYPT
-           "Cryptography API: Next Generation (bcrypt.dll)\n"
-#else
-#error "Unknown Crypto Library"
+#ifdef N2N_HAVE_CC20
+    printf("With ChaCha20 provided by built-in (pure C)\n");
 #endif
-    );
-#endif // N2N_HAVE_AES
     printf("Copyright 2007-16 - http://www.ntop.org\n"
            "Copyright 2017-24 - https://github.com/mxre/n2n\n"
            "Copyright 2025-26 - https://github.com/lucktu/n2n6\n");

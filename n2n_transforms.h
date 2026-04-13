@@ -11,10 +11,8 @@
 #define N2N_TRANSFORM_ID_NULL           1
 #define N2N_TRANSFORM_ID_TWOFISH        2
 #define N2N_TRANSFORM_ID_AESCBC         3
-#define N2N_TRANSFORM_ID_LZO            4
+#define N2N_TRANSFORM_ID_CHACHA20       4
 #define N2N_TRANSFORM_ID_SPECK          5
-#define N2N_TRANSFORM_ID_TWOFISH_LZO    6
-#define N2N_TRANSFORM_ID_AESCBC_LZO     7
 #define N2N_TRANSFORM_ID_USER_START     64
 #define N2N_TRANSFORM_ID_MAX            65535
 
@@ -40,7 +38,8 @@ typedef ssize_t         (*n2n_transform_f)( n2n_trans_op_t * arg,
                                             uint8_t * outbuf,
                                             size_t out_len,
                                             const uint8_t * inbuf,
-                                            size_t in_len );
+                                            size_t in_len,
+                                            const uint8_t * peer_mac );
 
 /** Holds the info associated with a data transform plugin.
  *
@@ -72,13 +71,16 @@ int transop_twofish_setup( n2n_trans_op_t * ttt,
 /* Initialise an empty transop ready to receive cipherspec elements. */
 int  transop_twofish_init( n2n_trans_op_t * ttt );
 int  transop_aes_init( n2n_trans_op_t * ttt );
+int  edge_init_aes_from_key( n2n_trans_op_t * ttt, const uint8_t * key, size_t key_len );
+int  transop_cc20_init( n2n_trans_op_t * ttt );
+int  edge_init_cc20_from_key( n2n_trans_op_t * ttt, const uint8_t * key, size_t key_len );
 int  transop_speck_init( n2n_trans_op_t * ttt );
 int  transop_deinit_speck( n2n_trans_op_t * ttt );
 int  setup_speck_key( void * priv, const uint8_t * key, size_t key_len );
 int  transop_addspec_speck( n2n_trans_op_t * ttt, const n2n_cipherspec_t * cspec );
 n2n_tostat_t transop_tick_speck( n2n_trans_op_t * ttt, time_t now );
-ssize_t transop_encode_speck( n2n_trans_op_t * ttt, uint8_t * outbuf, size_t out_len, const uint8_t * inbuf, size_t in_len );
-ssize_t transop_decode_speck( n2n_trans_op_t * ttt, uint8_t * outbuf, size_t out_len, const uint8_t * inbuf, size_t in_len );
+ssize_t transop_encode_speck( n2n_trans_op_t * ttt, uint8_t * outbuf, size_t out_len, const uint8_t * inbuf, size_t in_len, const uint8_t * peer_mac );
+ssize_t transop_decode_speck( n2n_trans_op_t * ttt, uint8_t * outbuf, size_t out_len, const uint8_t * inbuf, size_t in_len, const uint8_t * peer_mac );
 void transop_null_init( n2n_trans_op_t * ttt );
 
 #endif /* N2N_TRANSFORMS_H_ */

@@ -154,7 +154,7 @@ int n2n_read_keyfile( n2n_cipherspec_t * specs,     /* fill out this array of ci
         while ( idx < numspecs )
         {
             n2n_cipherspec_t * k = &(specs[idx]);
-            fgets( line, N2N_KEYFILE_LINESIZE, fp );
+            char *_r = fgets( line, N2N_KEYFILE_LINESIZE, fp ); (void)_r;
             ++lineNum;
 
             if ( strlen(line) > 1 )

@@ -41,25 +41,6 @@
 #define reallocarray(p, n, s) realloc((p), (n) * (s))
 #endif
 
-#ifdef N2N_HAVE_AES
-#include "aes.h"
-#if USE_OPENSSL
-#include <openssl/crypto.h>
-#elif USE_NETTLE
-#include <nettle/version.h>
-#elif USE_MBEDTLS
-#include <mbedtls/version.h>
-#elif USE_GCRYPT
-#include <gcrypt.h>
-#elif USE_BCRYPT
-#include <windows.h>
-#include <bcrypt.h>
-
-// version stored by gcry_check_version
-char const* gcrypt_version;
-#endif
-#endif
-
 #define SOCKET_TIMEOUT_INTERVAL_SECS    1    /* sec */
 #define REGISTER_SUPER_INTERVAL_DFL     60   /* sec */
 #define REGISTER_SUPER_INTERVAL_MIN     30   /* sec */
@@ -85,8 +66,8 @@ char const* gcrypt_version;
 #define N2N_TRANSOP_NULL_IDX    0
 #define N2N_TRANSOP_TF_IDX      1
 #define N2N_TRANSOP_AESCBC_IDX  2
-#define N2N_TRANSOP_SPECK_IDX   3
-/* etc. */
+#define N2N_TRANSOP_CC20_IDX    3
+#define N2N_TRANSOP_SPECK_IDX   4
 
 
 
@@ -388,8 +369,9 @@ static int edge_init(n2n_edge_t * eee)
 
     transop_null_init(    &(eee->transop[N2N_TRANSOP_NULL_IDX]) );
     transop_twofish_init( &(eee->transop[N2N_TRANSOP_TF_IDX]  ) );
-    transop_aes_init( &(eee->transop[N2N_TRANSOP_AESCBC_IDX]  ) );
-    transop_speck_init( &(eee->transop[N2N_TRANSOP_SPECK_IDX]) );
+    transop_aes_init(     &(eee->transop[N2N_TRANSOP_AESCBC_IDX]) );
+    transop_cc20_init(    &(eee->transop[N2N_TRANSOP_CC20_IDX]) );
+    transop_speck_init(   &(eee->transop[N2N_TRANSOP_SPECK_IDX]) );
 
     eee->tx_transop_idx = N2N_TRANSOP_NULL_IDX; /* No guarantee the others have been setup */
 
@@ -445,174 +427,48 @@ static int edge_init_twofish( n2n_edge_t * eee, uint8_t *encrypt_pwd, uint64_t e
 #ifdef N2N_HAVE_AES
 static int edge_init_aes( n2n_edge_t * eee, uint8_t *encrypt_pwd, uint64_t encrypt_pwd_len )
 {
-    n2n_cipherspec_t spec;
-    int retval;
-    uint8_t padded_key[AES256_KEY_BYTES];  /* 32 bytes max */
-    size_t actual_key_len = encrypt_pwd_len;
-
-    /* Create a cipherspec for single-key AES operation */
-    spec.t = N2N_TRANSFORM_ID_AESCBC;
-    spec.valid_from = 0;
-    spec.valid_until = 0xFFFFFFFF;
-
-    /* Check key length and pad if necessary */
-    if (encrypt_pwd_len < AES128_KEY_BYTES) {
-        traceEvent(TRACE_WARNING, "AES key is too short (%zu bytes), padding to %d bytes",
-                    encrypt_pwd_len, AES128_KEY_BYTES);
-        memset(padded_key, 0, AES128_KEY_BYTES);
-        memcpy(padded_key, encrypt_pwd, encrypt_pwd_len);
-        actual_key_len = AES128_KEY_BYTES;
-        encrypt_pwd = padded_key;
-    } else if (encrypt_pwd_len > AES256_KEY_BYTES) {
-        traceEvent(TRACE_WARNING, "AES key is too long (%zu bytes), truncating to %d bytes",
-                    encrypt_pwd_len, AES256_KEY_BYTES);
-        actual_key_len = AES256_KEY_BYTES;
-    }
-
-    /* Format: "0_ascii_key" where 0 is SA ID - ASCII only */
-    snprintf((char*)spec.opaque, sizeof(spec.opaque), "0_");
-
-    /* Use ASCII directly - no hex parsing */
-    memcpy(spec.opaque + 2, encrypt_pwd, actual_key_len);
-    spec.opaque[2 + actual_key_len] = '\0';
-
-    /* Add the spec to the AES transform */
-    retval = (eee->transop[N2N_TRANSOP_AESCBC_IDX].addspec)(
-        &(eee->transop[N2N_TRANSOP_AESCBC_IDX]), &spec );
-
-    if (retval == 0) {
+    int retval = edge_init_aes_from_key(&eee->transop[N2N_TRANSOP_AESCBC_IDX],
+                                        encrypt_pwd, (size_t)encrypt_pwd_len);
+    if (retval == 0)
         eee->tx_transop_idx = N2N_TRANSOP_AESCBC_IDX;
-    }
-
     return retval;
 }
-#endif /* N2N_HAVE_AES */
+#endif
 
-/** Find the transop op-struct for the transform enumeration required.
- *
- * @return - index into the transop array, or -1 on failure.
- */
+#ifdef N2N_HAVE_CC20
+static int edge_init_cc20( n2n_edge_t * eee, uint8_t *encrypt_pwd, uint64_t encrypt_pwd_len )
+{
+    int retval = edge_init_cc20_from_key(&eee->transop[N2N_TRANSOP_CC20_IDX],
+                                         encrypt_pwd, (size_t)encrypt_pwd_len);
+    if (retval == 0)
+        eee->tx_transop_idx = N2N_TRANSOP_CC20_IDX;
+    return retval;
+}
+#endif
+
 static int transop_enum_to_index( n2n_transform_t id )
 {
-    switch (id)
-    {
-    case N2N_TRANSFORM_ID_TWOFISH:
-        return N2N_TRANSOP_TF_IDX;
-        break;
-    case N2N_TRANSFORM_ID_NULL:
-        return N2N_TRANSOP_NULL_IDX;
-        break;
-    case N2N_TRANSFORM_ID_AESCBC:
-        return N2N_TRANSOP_AESCBC_IDX;
-        break;
-    case N2N_TRANSFORM_ID_SPECK:
-        return N2N_TRANSOP_SPECK_IDX;
-        break;
-    default:
-        return -1;
+    switch (id) {
+    case N2N_TRANSFORM_ID_TWOFISH:  return N2N_TRANSOP_TF_IDX;
+    case N2N_TRANSFORM_ID_NULL:     return N2N_TRANSOP_NULL_IDX;
+    case N2N_TRANSFORM_ID_AESCBC:   return N2N_TRANSOP_AESCBC_IDX;
+    case N2N_TRANSFORM_ID_CHACHA20: return N2N_TRANSOP_CC20_IDX;
+    case N2N_TRANSFORM_ID_SPECK:    return N2N_TRANSOP_SPECK_IDX;
+    default:                        return -1;
     }
 }
 
-/** Called periodically to roll keys and do any periodic maintenance in the
- *  tranform operations state machines. */
 static int n2n_tick_transop( n2n_edge_t * eee, time_t now )
 {
-    n2n_tostat_t tst;
-    size_t trop = eee->tx_transop_idx;
-
-    /* Tests are done in order that most preferred transform is last and causes
-     * tx_transop_idx to be left at most preferred valid transform. */
-    tst = (eee->transop[N2N_TRANSOP_NULL_IDX].tick)( &(eee->transop[N2N_TRANSOP_NULL_IDX]), now );
-
-
-    tst = (eee->transop[N2N_TRANSOP_TF_IDX].tick)( &(eee->transop[N2N_TRANSOP_TF_IDX]), now );
-    if ( tst.can_tx )
-    {
-        traceEvent( TRACE_DEBUG, "can_tx TF (idx=%u)", (unsigned int)N2N_TRANSOP_TF_IDX );
-        trop = N2N_TRANSOP_TF_IDX;
-    }
-
-    tst = (eee->transop[N2N_TRANSOP_AESCBC_IDX].tick)( &(eee->transop[N2N_TRANSOP_AESCBC_IDX]), now );
-    if ( tst.can_tx )
-    {
-        traceEvent( TRACE_DEBUG, "can_tx AESCBC (idx=%u)", (unsigned int)N2N_TRANSOP_AESCBC_IDX );
-        trop = N2N_TRANSOP_AESCBC_IDX;
-    }
-
-    tst = (eee->transop[N2N_TRANSOP_SPECK_IDX].tick)( &(eee->transop[N2N_TRANSOP_SPECK_IDX]), now );
-    if ( tst.can_tx )
-    {
-        traceEvent( TRACE_DEBUG, "can_tx SPECK (idx=%u)", (unsigned int)N2N_TRANSOP_SPECK_IDX );
-        trop = N2N_TRANSOP_SPECK_IDX;
-    }
-
-    eee->tx_transop_idx = trop;
+    /* Tick all transops for maintenance only.
+     * tx_transop_idx is set by -B option and must not be overridden here. */
+    (eee->transop[N2N_TRANSOP_NULL_IDX].tick)( &(eee->transop[N2N_TRANSOP_NULL_IDX]), now );
+    (eee->transop[N2N_TRANSOP_TF_IDX].tick)( &(eee->transop[N2N_TRANSOP_TF_IDX]), now );
+    (eee->transop[N2N_TRANSOP_AESCBC_IDX].tick)( &(eee->transop[N2N_TRANSOP_AESCBC_IDX]), now );
+    (eee->transop[N2N_TRANSOP_CC20_IDX].tick)( &(eee->transop[N2N_TRANSOP_CC20_IDX]), now );
+    (eee->transop[N2N_TRANSOP_SPECK_IDX].tick)( &(eee->transop[N2N_TRANSOP_SPECK_IDX]), now );
     return 0;
 }
-
-
-/** Read in a key-schedule file, parse the lines and pass each line to the
- *  appropriate trans_op for parsing of key-data and adding key-schedule
- *  entries. The lookup table of time->trans_op is constructed such that
- *  encoding can be passed to the correct trans_op. The trans_op internal table
- *  will then determine the best SA for that trans_op from the key schedule to
- *  use for encoding. */
-static int edge_init_keyschedule( n2n_edge_t * eee )
-{
-
-#define N2N_NUM_CIPHERSPECS 32
-
-    int retval = -1;
-    ssize_t numSpecs=0;
-    n2n_cipherspec_t specs[N2N_NUM_CIPHERSPECS];
-    size_t i;
-    time_t now = time(NULL);
-
-    numSpecs = n2n_read_keyfile( specs, N2N_NUM_CIPHERSPECS, eee->keyschedule );
-
-    if ( numSpecs > 0 )
-    {
-        traceEvent( TRACE_NORMAL, "keyfile = %s read -> %d specs.\n", eee->keyschedule, (signed int)numSpecs);
-
-        for ( i=0; i < (size_t)numSpecs; ++i )
-        {
-            int idx;
-
-            idx = transop_enum_to_index( specs[i].t );
-
-            switch (idx)
-            {
-            case N2N_TRANSOP_TF_IDX:
-            case N2N_TRANSOP_AESCBC_IDX:
-            case N2N_TRANSOP_SPECK_IDX:
-            {
-                retval = (eee->transop[idx].addspec)( &(eee->transop[idx]),
-                                                      &(specs[i]) );
-                break;
-            }
-            default:
-                retval = -1;
-            }
-
-            if (0 != retval)
-            {
-                traceEvent( TRACE_ERROR, "keyschedule failed to add spec[%u] to transop[%d].\n",
-                            (unsigned int)i, idx);
-
-                return retval;
-            }
-        }
-
-        n2n_tick_transop( eee, now );
-    }
-    else
-    {
-        traceEvent( TRACE_ERROR, "Failed to process '%s'", eee->keyschedule );
-    }
-
-    return retval;
-}
-
 
 /** Deinitialise the edge and deallocate any owned memory. */
 static void edge_deinit(n2n_edge_t * eee)
@@ -633,6 +489,7 @@ static void edge_deinit(n2n_edge_t * eee)
     (eee->transop[N2N_TRANSOP_TF_IDX].deinit)(&eee->transop[N2N_TRANSOP_TF_IDX]);
     (eee->transop[N2N_TRANSOP_NULL_IDX].deinit)(&eee->transop[N2N_TRANSOP_NULL_IDX]);
     (eee->transop[N2N_TRANSOP_AESCBC_IDX].deinit)(&eee->transop[N2N_TRANSOP_AESCBC_IDX]);
+    (eee->transop[N2N_TRANSOP_CC20_IDX].deinit)(&eee->transop[N2N_TRANSOP_CC20_IDX]);
     (eee->transop[N2N_TRANSOP_SPECK_IDX].deinit)(&eee->transop[N2N_TRANSOP_SPECK_IDX]);
 
 #ifdef _WIN32
@@ -663,17 +520,16 @@ static void help() {
     printf("-A <IPv6>/<prefixlen>    | Set interface IPv6 address, only supported if IPv4 set to 'static'\n");
     printf("-c <community>           | n2n community name the edge belongs to.\n");
     printf("-B <mode>                | Encryption:");
-    #ifdef N2N_HAVE_AES
-    printf(" B0 = keyfile(-K),");
-    #endif
     printf(" B1 = disable, B2 = twofish(-k)");
     #ifdef N2N_HAVE_AES
     printf(", B3 = AES-CBC(-k)");
     #endif
-    printf(", B5 = Speck(-k)\n");
-    printf("                         : '-B1' can also be used as '-B 1' (default: twofish)\n");
-    printf("-k <encrypt key>         | Encryption key (ASCII, max 32) - also N2N_KEY=<encrypt key>. Not with -K.\n");
-    printf("-K <key file>            | Specify a key schedule file to load. Not with -k.\n");
+    #ifdef N2N_HAVE_CC20
+    printf(", B4 = ChaCha20(-k)");
+    #endif
+    printf("\n");
+    printf("                         : B5 = Speck(-k). '-B1' can also be used as '-B 1' (default: twofish)\n");
+    printf("-k <encrypt key>         | Encryption key (ASCII, max 32) - also N2N_KEY=<encrypt key>.\n");
     printf("-l <supernode host:port> | Supernode IP:port (default: ouno.eu.org:10084)\n");
     printf("-4/-6                    | Resolve supernode DNS name as IPv4 or IPv6 (default: auto)\n");
     printf("-p <local port>          | Fixed local UDP port.\n");
@@ -1847,7 +1703,7 @@ static void send_packet2net(n2n_edge_t * eee,
 
     idx += eee->transop[tx_transop_idx].fwd( &(eee->transop[tx_transop_idx]),
                                              pktbuf+idx, N2N_PKT_BUF_SIZE-idx,
-                                             tap_pkt, len );
+                                             tap_pkt, len, destMac );
     ++(eee->transop[tx_transop_idx].tx_cnt); /* stats */
 
     send_PACKET( eee, destMac, pktbuf, idx ); /* to peer or supernode */
@@ -2015,7 +1871,7 @@ static int handle_PACKET( n2n_edge_t * eee,
             eth_payload = decodebuf;
             eth_size = eee->transop[rx_transop_idx].rev( &(eee->transop[rx_transop_idx]),
                                                          eth_payload, N2N_PKT_BUF_SIZE,
-                                                         payload, psize );
+                                                         payload, psize, pkt->srcMac );
             ++(eee->transop[rx_transop_idx].rx_cnt); /* stats */
 
             /* Write ethernet packet to tap device. */
@@ -2123,7 +1979,6 @@ static void readFromMgmtSocket(n2n_edge_t *eee, int *keep_running) {
                                 "  help    This help message\n"
                                 "  +verb   Increase verbosity of logging\n"
                                 "  -verb   Decrease verbosity of logging\n"
-                                "  reload  Re-read the keyschedule\n"
                                 "  <enter> Display statistics\n\n");
             sendto(eee->mgmt_sock, udp_buf, msg_len, 0/*flags*/,
                    (struct sockaddr*) &sender_sock, i);
@@ -2157,21 +2012,6 @@ static void readFromMgmtSocket(n2n_edge_t *eee, int *keep_running) {
             sendto(eee->mgmt_sock, udp_buf, msg_len, 0/*flags*/,
                    (struct sockaddr*) &sender_sock, i);
             return;
-        }
-    }
-
-    if (recvlen >= 6) {
-        if (0 == memcmp(udp_buf, "reload", 6)) {
-            if (strlen(eee->keyschedule) > 0) {
-                if (edge_init_keyschedule(eee) == 0) {
-                    msg_len = 0;
-                    msg_len += snprintf((char*) (udp_buf + msg_len), (N2N_PKT_BUF_SIZE - msg_len),
-                                        "> OK\n");
-                    sendto(eee->mgmt_sock, udp_buf, msg_len, 0/*flags*/,
-                           (struct sockaddr*) &sender_sock, i);
-                }
-                return;
-            }
         }
     }
 
@@ -3356,22 +3196,16 @@ if (argc > 1 && argv[1][0] != '-' && access(argv[1], R_OK) == 0) {
             }
 
             encrypt_mode = atoi(optarg);
-            if (encrypt_mode < 0 || encrypt_mode > 5) {
-                    fprintf(stderr, "Error: Invalid encryption mode. Use B0-B3, B5\n");
-                    exit(1);
+            if (encrypt_mode < 1 || encrypt_mode > 5 || encrypt_mode == 0) {
+                fprintf(stderr, "Error: Invalid encryption mode. Use B1-B5\n");
+                exit(1);
             }
             break;
         }
         case'K':
         {
-            if ( encrypt_key ) {
-                fprintf(stderr, "Error: -K and -k options are mutually exclusive.\n");
-                exit(1);
-            } else {
-                strncpy( eee.keyschedule, optarg, N2N_PATHNAME_MAXLEN-1 );
-                eee.keyschedule[N2N_PATHNAME_MAXLEN-1]=0; /* strncpy does not add NULL if the source has no NULL. */
-                traceEvent(TRACE_DEBUG, "keyfile = '%s'\n", eee.keyschedule);
-            }
+            fprintf(stderr, "Error: -K (keyfile) is no longer supported. Use -k with -B3/-B4/-B5.\n");
+            exit(1);
             break;
         }
         case 'a': /* IP address and mode of TUNTAP interface */
@@ -3440,13 +3274,8 @@ if (argc > 1 && argv[1][0] != '-' && access(argv[1], R_OK) == 0) {
 
         case 'k': /* encrypt key */
         {
-            if (strlen(eee.keyschedule) > 0 ) {
-                fprintf(stderr, "Error: -K and -k options are mutually exclusive.\n");
-                exit(1);
-            } else {
-                traceEvent(TRACE_DEBUG, "encrypt_key = '%s'\n", encrypt_key);
-                encrypt_key = strdup(optarg);
-            }
+            traceEvent(TRACE_DEBUG, "encrypt_key = '%s'\n", encrypt_key);
+            encrypt_key = strdup(optarg);
             break;
         }
         case 'r': /* enable packet routing across n2n endpoints */
@@ -3598,9 +3427,8 @@ if (argc > 1 && argv[1][0] != '-' && access(argv[1], R_OK) == 0) {
         }
     }
 
-    if ( (NULL == encrypt_key ) && ( 0 == strlen(eee.keyschedule)) ) {
+    if (NULL == encrypt_key) {
         traceEvent(TRACE_DEBUG, "Encryption is disabled in edge.");
-
         eee.null_transop = 1;
     }
 
@@ -3686,17 +3514,7 @@ if (argc > 1 && argv[1][0] != '-' && access(argv[1], R_OK) == 0) {
   if(local_port > 0)
       traceEvent(TRACE_NORMAL, "Binding to local port %d", (signed int)local_port);
 
-  if (encrypt_mode == 0) {
-						traceEvent(TRACE_NORMAL, "Using keyfile-based encryption");
-      if (strlen(eee.keyschedule) == 0) {
-          fprintf(stderr, "Error: B0 mode requires -K <keyfile>\n");
-          exit(1);
-      }
-      if (edge_init_keyschedule(&eee) != 0) {
-          fprintf(stderr, "Error: keyschedule setup failed.\n");
-          return(-1);
-      }
-  } else if (encrypt_mode == 1) {
+  if (encrypt_mode == 1) {
       traceEvent(TRACE_NORMAL, "Using no encryption");
       eee.null_transop = 1;
   } else if (encrypt_mode == 2) {
@@ -3706,41 +3524,34 @@ if (argc > 1 && argv[1][0] != '-' && access(argv[1], R_OK) == 0) {
           eee.null_transop = 1;
       } else {
           traceEvent(TRACE_NORMAL, "Using Twofish encryption");
-          if(edge_init_twofish(&eee, (uint8_t*)(encrypt_key), strlen(encrypt_key)) < 0) {
+          if (edge_init_twofish(&eee, (uint8_t*)(encrypt_key), strlen(encrypt_key)) < 0) {
               fprintf(stderr, "Error: twofish setup failed.\n");
               return(-1);
           }
       }
 #ifdef N2N_HAVE_AES
-		} else if (encrypt_mode == 3) {
-				  // B3 - AES-CBC
-				  traceEvent(TRACE_NORMAL, "Using AES-CBC encryption");
-				  if (!encrypt_key) {
-						    fprintf(stderr, "Error: B3 mode requires -k <key>\n");
-						    exit(1);
-			  	}
-				  if(edge_init_aes( &eee, (uint8_t *)(encrypt_key), strlen(encrypt_key) ) < 0) {
-						    fprintf(stderr, "Error: AES setup failed.\n");
-						    return(-1);
-			  	}
-#endif /* N2N_HAVE_AES */
-		} else if (encrypt_mode == 5) {
-				  // B5 - Speck
-		  		traceEvent(TRACE_NORMAL, "Using Speck encryption");
-				  if (!encrypt_key) {
-					    	fprintf(stderr, "Error: B5 mode requires -k <key>\n");
-						    exit(1);
-			  	}
-			  	if(edge_init_speck(&eee, (uint8_t*)(encrypt_key), strlen(encrypt_key)) < 0) {
-						    fprintf(stderr, "Error: Speck setup failed.\n");
-						    return(-1);
-			  	}
-  }
-
-  /* keyschedule check should be independent of encryption modes */
-  if (strlen(eee.keyschedule) > 0 && encrypt_mode != 0) {
-      if (edge_init_keyschedule(&eee) != 0) {
-          fprintf(stderr, "Error: keyschedule setup failed.\n");
+  } else if (encrypt_mode == 3) {
+      traceEvent(TRACE_NORMAL, "Using AES-CBC encryption");
+      if (!encrypt_key) { fprintf(stderr, "Error: B3 requires -k <key>\n"); exit(1); }
+      if (edge_init_aes(&eee, (uint8_t*)(encrypt_key), strlen(encrypt_key)) < 0) {
+          fprintf(stderr, "Error: AES setup failed.\n");
+          return(-1);
+      }
+#endif
+#ifdef N2N_HAVE_CC20
+  } else if (encrypt_mode == 4) {
+      traceEvent(TRACE_NORMAL, "Using ChaCha20 encryption");
+      if (!encrypt_key) { fprintf(stderr, "Error: B4 requires -k <key>\n"); exit(1); }
+      if (edge_init_cc20(&eee, (uint8_t*)(encrypt_key), strlen(encrypt_key)) < 0) {
+          fprintf(stderr, "Error: ChaCha20 setup failed.\n");
+          return(-1);
+      }
+#endif
+  } else if (encrypt_mode == 5) {
+      traceEvent(TRACE_NORMAL, "Using Speck encryption");
+      if (!encrypt_key) { fprintf(stderr, "Error: B5 requires -k <key>\n"); exit(1); }
+      if (edge_init_speck(&eee, (uint8_t*)(encrypt_key), strlen(encrypt_key)) < 0) {
+          fprintf(stderr, "Error: Speck setup failed.\n");
           return(-1);
       }
   }

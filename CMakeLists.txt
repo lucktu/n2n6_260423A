@@ -7,14 +7,11 @@ set(N2N_OSNAME ${CMAKE_SYSTEM_NAME})
 
 add_definitions(-DN2N_VERSION=\"${N2N_VERSION}\" -DN2N_OSNAME=\"${N2N_OSNAME}\")
 
-# N2n specific params
-if(NOT DEFINED N2N_OPTION_AES)
-set(N2N_OPTION_AES OFF)
-endif(NOT DEFINED N2N_OPTION_AES)
-
-if(N2N_OPTION_AES)
+# AES now uses pure C implementation - always enabled, no OpenSSL needed
 add_definitions(-DN2N_HAVE_AES)
-endif(N2N_OPTION_AES)
+
+# ChaCha20 (B4): pure C implementation, always enabled
+add_definitions(-DN2N_HAVE_CC20)
 
 # Crypto library selection
 if(USE_GCRYPT)
@@ -53,6 +50,8 @@ if(NOT DEFINED CMAKE_BUILD_TYPE)
 set(CMAKE_BUILD_TYPE None)
 endif(NOT DEFINED CMAKE_BUILD_TYPE)
 
+set(CMAKE_INSTALL_DO_STRIP ON)
+
 # Create an n2n object library
 add_library(n2n OBJECT
         n2n.c
@@ -84,16 +83,18 @@ set(EDGE_RESOURCE )
 set(SN_RESOURCE )
 endif(DEFINED WIN32)
 
-# Build edge executable
-add_executable(edge
-        edge.c
+# Build n2n static library (enables better dead code elimination when linking)
+add_library(n2n_core STATIC
         aes.c
+        sha.c
         twofish.c
         speck.c
         pearson.c
+        cc20.c
         transform_null.c
         transform_tf.c
         transform_aes.c
+        transform_cc20.c
         transform_speck.c
         n2n_keyfile.c
         minilzo.c
@@ -101,31 +102,19 @@ add_executable(edge
         tuntap_netbsd.c
         tuntap_linux.c
         tuntap_osx.c
-        ${OBJECTS} ${EDGE_RESOURCE}
+        ${OBJECTS}
 )
+set_property(TARGET n2n_core PROPERTY C_STANDARD 99)
+
+# Build edge executable
+add_executable(edge edge.c ${EDGE_RESOURCE})
 set_property(TARGET edge PROPERTY C_STANDARD 99)
+target_link_libraries(edge n2n_core)
 
 # Build supernode executable
-add_executable(supernode
-        sn.c
-        aes.c
-        twofish.c
-        speck.c
-        pearson.c
-        transform_null.c
-        transform_tf.c
-        transform_aes.c
-        transform_speck.c
-        n2n_keyfile.c
-        ${OBJECTS} ${SN_RESOURCE}
-)
+add_executable(supernode sn.c ${SN_RESOURCE})
 set_property(TARGET supernode PROPERTY C_STANDARD 99)
-
-# Fixed: Link pthread and dl for static builds with OpenSSL
-if(N2N_OPTION_AES AND USE_OPENSSL AND NOT WIN32)
-    target_link_libraries(edge pthread dl)
-    target_link_libraries(supernode pthread dl)
-endif()
+target_link_libraries(supernode n2n_core)
 
 # Windows-specific configuration
 if(DEFINED WIN32)
@@ -138,10 +127,15 @@ add_custom_command(
 )
 endif(DEFINED WIN32)
 
-if(N2N_OPTION_AES)
-target_link_libraries(edge ${CRYPTO_LIB})
-target_link_libraries(supernode ${CRYPTO_LIB})
-endif(N2N_OPTION_AES)
+if(WIN32)
+  target_link_libraries(n2n_core bcrypt)
+endif()
+
+# Dead code elimination
+if(NOT DEFINED WIN32)
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -ffunction-sections -fdata-sections")
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,--gc-sections")
+endif()
 
 if(NOT DEFINED WIN32)
 #add_executable(test test.c)

@@ -56,7 +56,8 @@ ssize_t transop_encode_speck(n2n_trans_op_t *arg,
                             uint8_t *outbuf,
                             size_t out_len,
                             const uint8_t *inbuf,
-                            size_t in_len) {
+                            size_t in_len,
+                            const uint8_t *peer_mac _unused_) {
     transop_speck_t *priv = (transop_speck_t *)arg->priv;
     uint8_t nonce[N2N_SPECK_NONCE_SIZE];
     size_t idx = 0;
@@ -89,7 +90,8 @@ ssize_t transop_decode_speck(n2n_trans_op_t *arg,
                              uint8_t *outbuf,
                              size_t out_len,
                              const uint8_t *inbuf,
-                             size_t in_len) {
+                             size_t in_len,
+                             const uint8_t *peer_mac _unused_) {
     transop_speck_t *priv = (transop_speck_t *)arg->priv;
     uint8_t nonce[N2N_SPECK_NONCE_SIZE];
     size_t idx = 0;
