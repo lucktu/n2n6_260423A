@@ -895,6 +895,21 @@ static int same_public_ip( const n2n_sock_t * a, const n2n_sock_t * b )
     return 0;
 }
 
+/** Check if two IPv4 sockets are on the same /24 subnet */
+static int same_subnet(const n2n_sock_t *sock1, const n2n_sock_t *sock2) {
+    if (sock1->family == AF_INET && sock2->family == AF_INET) {
+        uint32_t addr1, addr2;
+        /* Convert 4-byte array to uint32_t */
+        memcpy(&addr1, sock1->addr.v4, IPV4_SIZE);
+        memcpy(&addr2, sock2->addr.v4, IPV4_SIZE);
+        addr1 = ntohl(addr1);
+        addr2 = ntohl(addr2);
+        /* Check if /24 subnet matches */
+        return (addr1 & 0xFFFFFF00) == (addr2 & 0xFFFFFF00);
+    }
+    return 0;
+}
+
 /** Send a PROBE packet directly to a peer to open NAT mapping */
 static void send_probe( n2n_edge_t * eee, const n2n_sock_t * peer_sock, const n2n_mac_t dstMac )
 {
@@ -992,7 +1007,11 @@ static void check_punch_timeouts( n2n_edge_t * eee, time_t now )
                        macaddr_str(mac_tmp, scan->mac_addr));
             send_register(eee, &scan->sockets[0]);
             send_register(eee, &(eee->supernode));
-            start_punch(eee, scan);
+
+            /* FIXED: Send direct PROBE instead of calling start_punch */
+            send_probe(eee, &scan->sockets[0], scan->mac_addr);
+            scan->punch_start_time = n2n_now();
+            scan->last_punch_probe = scan->punch_start_time;
         }
 
         if ( scan->punch_start_time != 0 &&
@@ -2405,7 +2424,6 @@ static void readFromIPSocket( n2n_edge_t * eee, SOCKET fd )
                     {
                         /* Use sender's public port for LAN address */
                         n2n_sock_t lan_sock = reg.sock;
-                        lan_sock.port = orig_sender->port;
                         traceEvent(TRACE_INFO, "Rx REGISTER with LAN addr %s - trying LAN direct",
                                    sock_to_cstr(sockbuf1, &lan_sock));
                         try_send_register_lan(eee, from_supernode, reg.srcMac, orig_sender, &lan_sock);
@@ -2567,6 +2585,13 @@ static void readFromIPSocket( n2n_edge_t * eee, SOCKET fd )
 
             PEERS_LOCK(eee);
             struct peer_info *known = find_peer_by_mac(eee->known_peers, pi.mac);
+            if (known) {
+                known->punch_failed = 0;
+                known->punch_start_time = 0;
+                known->lan_punch_done = 0;
+                known->lan_punch_start = 0;
+                known->punch_retry_count = 0;
+            }
             if (!known) {
                 /* New peer: IPv6 preferred if we have IPv6 socket and peer has IPv6 */
                 if ((pi.aflags & N2N_AFLAGS_IPV6_SOCKET) &&
@@ -2583,11 +2608,19 @@ static void readFromIPSocket( n2n_edge_t * eee, SOCKET fd )
                     pi.sockets[0].family == AF_INET &&
                     memcmp(eee->my_public_sock.addr.v4, pi.sockets[0].addr.v4, IPV4_SIZE) == 0)
                 {
-                    n2n_sock_t lan_sock = pi.sockets[1];
-                    lan_sock.port = pi.sockets[0].port;
-                    traceEvent(TRACE_INFO, "Same public IP - trying LAN direct: %s",
-                               sock_to_cstr(sockbuf1, &lan_sock));
-                    try_send_register_lan(eee, 1, pi.mac, &pi.sockets[0], &lan_sock);
+                    /* Check if peers are on same subnet before trying LAN punch */
+                    if (same_subnet(&eee->local_sock, &pi.sockets[1])) {
+                        n2n_sock_t lan_sock = pi.sockets[1];
+                        /* FIXED: Keep original LAN port, don't replace with public port */
+                        traceEvent(TRACE_INFO, "Same public IP and subnet - trying LAN direct: %s",
+                                   sock_to_cstr(sockbuf1, &lan_sock));
+                        try_send_register_lan(eee, 1, pi.mac, &pi.sockets[0], &lan_sock);
+                    } else {
+                        /* Different subnet: use WAN punch directly */
+                        traceEvent(TRACE_INFO, "Same public IP but different subnet - using WAN punch: %s",
+                                   sock_to_cstr(sockbuf1, &pi.sockets[0]));
+                        try_send_register(eee, 1, pi.mac, &pi.sockets[0]);
+                    }
                 }
                 else if (pi.sockets[0].family == AF_INET6 && eee->udp_sock6 == -1)
                 {
@@ -2612,14 +2645,25 @@ static void readFromIPSocket( n2n_edge_t * eee, SOCKET fd )
                     }
                 }
             } else if (sock_equal(&known->sock, &pi.sockets[0]) != 0) {
-                /* Check if known->sock is the LAN address matching pi.sockets[1] */
-                int lan_match = (pi.aflags & N2N_AFLAGS_LOCAL_SOCKET) &&
-                                sock_equal(&known->sock, &pi.sockets[1]) == 0;
-                if (!lan_match) {
-                    /* Peer address changed: move back to pending and re-punch */
-                    traceEvent(TRACE_INFO, "Peer %s addr changed, re-punching",
-                               macaddr_str(mac_buf1, pi.mac));
-                    /* Remove from known_peers */
+                /* Known peer detected - check if we should try LAN punch first */
+                traceEvent(TRACE_INFO, "Peer %s detected (possibly restarted), checking LAN possibility",
+                           macaddr_str(mac_buf1, pi.mac));
+
+                /* Check if same public IP and has LAN socket - try LAN punch first */
+                if ((pi.aflags & N2N_AFLAGS_LOCAL_SOCKET) &&
+                    pi.sockets[1].family != 0 && pi.sockets[1].port != 0 &&
+                    eee->my_public_sock.family == AF_INET &&
+                    pi.sockets[0].family == AF_INET &&
+                    memcmp(eee->my_public_sock.addr.v4, pi.sockets[0].addr.v4, IPV4_SIZE) == 0)
+                {
+                    /* Same public IP - try LAN punch first */
+                    n2n_sock_t lan_sock = pi.sockets[1];
+                    // Keep original LAN port (don't replace with public port)
+                    traceEvent(TRACE_INFO, "Known peer %s - trying LAN direct: %s",
+                               macaddr_str(mac_buf1, pi.mac),
+                               sock_to_cstr(sockbuf1, &lan_sock));
+
+                    /* Move to pending_peers for LAN punch */
                     struct peer_info *prev = NULL, *scan = eee->known_peers;
                     while (scan && memcmp(scan->mac_addr, pi.mac, N2N_MAC_SIZE) != 0) {
                         prev = scan; scan = scan->next;
@@ -2627,49 +2671,46 @@ static void readFromIPSocket( n2n_edge_t * eee, SOCKET fd )
                     if (scan) {
                         if (prev) prev->next = scan->next;
                         else eee->known_peers = scan->next;
-                        free(scan);
-                    }
-                    /* Re-punch with new address */
-                    if ((pi.aflags & N2N_AFLAGS_IPV6_SOCKET) &&
-                        pi.sock6.family == AF_INET6 &&
-                        eee->udp_sock6 != -1)
-                    {
-                        traceEvent(TRACE_INFO, "IPv6 direct re-punch: %s",
-                                   sock_to_cstr(sockbuf1, &pi.sock6));
-                        try_send_register(eee, 1, pi.mac, &pi.sock6);
-                    }
-                    else if ((pi.aflags & N2N_AFLAGS_LOCAL_SOCKET) &&
-                        pi.sockets[1].family != 0 && pi.sockets[1].port != 0 &&
-                        eee->my_public_sock.family == AF_INET &&
-                        pi.sockets[0].family == AF_INET &&
-                        memcmp(eee->my_public_sock.addr.v4, pi.sockets[0].addr.v4, IPV4_SIZE) == 0)
-                    {
-                        n2n_sock_t lan_sock = pi.sockets[1];
-                        lan_sock.port = pi.sockets[0].port;
+
+                        /* Reset state for fresh LAN punch */
+                        scan->punch_start_time = 0;
+                        scan->punch_failed = 0;
+                        scan->lan_punch_start = n2n_now();
+                        scan->lan_punch_done = 0;
+                        scan->last_seen = n2n_now();
+                        scan->num_sockets = 2;
+                        scan->sockets[0] = pi.sockets[0];
+                        scan->sockets[1] = pi.sockets[1];
+
+                        scan->next = eee->pending_peers;
+                        eee->pending_peers = scan;
+
                         try_send_register_lan(eee, 1, pi.mac, &pi.sockets[0], &lan_sock);
                     }
-                    else if (pi.sockets[0].family == AF_INET6 && eee->udp_sock6 == -1)
-                    {
-                        traceEvent(TRACE_DEBUG, "Peer %s re-punch: IPv6-only but no local IPv6 socket, relay only",
-                                   macaddr_str(mac_buf1, pi.mac));
+                } else {
+                    /* Different public IP - use normal WAN punch */
+                    traceEvent(TRACE_INFO, "Known peer %s - using WAN punch", macaddr_str(mac_buf1, pi.mac));
+
+                    struct peer_info *prev = NULL, *scan = eee->known_peers;
+                    while (scan && memcmp(scan->mac_addr, pi.mac, N2N_MAC_SIZE) != 0) {
+                        prev = scan; scan = scan->next;
                     }
-                    else
-                    {
-                        try_send_register(eee, 1, pi.mac, &pi.sockets[0]);
+                    if (scan) {
+                        if (prev) prev->next = scan->next;
+                        else eee->known_peers = scan->next;
+
+                        scan->punch_start_time = 0;
+                        scan->punch_failed = 0;
+                        scan->lan_punch_start = 0;
+                        scan->lan_punch_done = 0;
+                        scan->last_seen = n2n_now();
+
+                        scan->next = eee->pending_peers;
+                        eee->pending_peers = scan;
+
+                        start_punch(eee, scan);
                     }
-                    /* Store sock6 and version/os_name into pending_peer */
-                    {
-                        struct peer_info *pp = find_peer_by_mac(eee->pending_peers, pi.mac);
-                        if (pp) {
-                            if ((pi.aflags & N2N_AFLAGS_IPV6_SOCKET) && pi.sock6.family == AF_INET6)
-                                pp->sock6 = pi.sock6;
-                            if (pi.version[0] != '\0')
-                                strncpy(pp->version, pi.version, sizeof(pp->version) - 1);
-                            if (pi.os_name[0] != '\0')
-                                strncpy(pp->os_name, pi.os_name, sizeof(pp->os_name) - 1);
-                        }
-                    }
-                } /* end if (!lan_match) */
+                }
             }
             PEERS_UNLOCK(eee);
         }
